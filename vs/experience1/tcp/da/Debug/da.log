@@ -1,0 +1,27 @@
+﻿生成启动时间为 2018/4/15 11:26:49。
+     1>项目“D:\junior\vs\da\da\da.vcxproj”在节点 2 上(build 个目标)。
+     1>InitializeBuildStatus:
+         正在创建“Debug\da.unsuccessfulbuild”，因为已指定“AlwaysCreate”。
+       ClCompile:
+         所有输出均为最新。
+         D:\mysoft\VisualStudio2017\VC\bin\CL.exe /c /ZI /nologo /W3 /WX- /Od /Oy- /D WIN32 /D _DEBUG /D _CONSOLE /D _UNICODE /D UNICODE /Gm /EHsc /RTC1 /MDd /GS /fp:precise /Zc:wchar_t /Zc:forScope /Fo"Debug\\" /Fd"Debug\vc100.pdb" /Gd /TC /analyze- /errorReport:prompt daytime.c
+         daytime.c
+     1>d:\junior\vs\da\da\daytime.c(25): warning C4566: 由通用字符名称“\u00A0”表示的字符不能在当前代码页(936)中表示出来
+     1>d:\junior\vs\da\da\daytime.c(25): warning C4566: 由通用字符名称“\u00A0”表示的字符不能在当前代码页(936)中表示出来
+     1>d:\junior\vs\da\da\daytime.c(42): warning C4996: 'sprintf': This function or variable may be unsafe. Consider using sprintf_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+                 d:\mysoft\visualstudio2017\vc\include\stdio.h(371) : 参见“sprintf”的声明
+     1>d:\junior\vs\da\da\daytime.c(42): warning C4996: 'ctime': This function or variable may be unsafe. Consider using ctime_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+                 d:\mysoft\visualstudio2017\vc\include\time.inl(86) : 参见“ctime”的声明
+       ManifestResourceCompile:
+         所有输出均为最新。
+       Link:
+         D:\mysoft\VisualStudio2017\VC\bin\link.exe /ERRORREPORT:PROMPT /OUT:"D:\junior\vs\da\Debug\da.exe" /INCREMENTAL /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib /MANIFEST /ManifestFile:"Debug\da.exe.intermediate.manifest" /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /DEBUG /PDB:"D:\junior\vs\da\Debug\da.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /DYNAMICBASE /NXCOMPAT /IMPLIB:"D:\junior\vs\da\Debug\da.lib" /MACHINE:X86 Debug\da.exe.embed.manifest.res
+         Debug\client.obj
+         Debug\daytime.obj
+     1>daytime.obj : error LNK2005: _main 已经在 client.obj 中定义
+     1>D:\junior\vs\da\Debug\da.exe : fatal error LNK1169: 找到一个或多个多重定义的符号
+     1>已完成生成项目“D:\junior\vs\da\da\da.vcxproj”(build 个目标)的操作 - 失败。
+
+生成失败。
+
+已用时间 00:00:00.61

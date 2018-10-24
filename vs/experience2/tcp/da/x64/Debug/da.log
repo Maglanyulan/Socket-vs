@@ -1,0 +1,52 @@
+﻿生成启动时间为 2018/4/15 10:55:37。
+     1>项目“D:\junior\vs\da\da\da.vcxproj”在节点 2 上(build 个目标)。
+     1>PrepareForBuild:
+         正在创建目录“D:\junior\vs\da\x64\Debug\”。
+       InitializeBuildStatus:
+         正在创建“x64\Debug\da.unsuccessfulbuild”，因为已指定“AlwaysCreate”。
+       ClCompile:
+         D:\mysoft\VisualStudio2017\VC\bin\x86_amd64\CL.exe /c /Zi /nologo /W3 /WX- /Od /D WIN32 /D _DEBUG /D _CONSOLE /D _UNICODE /D UNICODE /Gm /EHsc /RTC1 /MDd /GS /fp:precise /Zc:wchar_t /Zc:forScope /Fo"x64\Debug\\" /Fd"x64\Debug\vc100.pdb" /Gd /TP /errorReport:prompt client.cpp daytime.cpp
+         daytime.cpp
+     1>daytime.cpp(23): warning C4566: 由通用字符名称“\u00A0”表示的字符不能在当前代码页(936)中表示出来
+     1>daytime.cpp(23): warning C4566: 由通用字符名称“\u00A0”表示的字符不能在当前代码页(936)中表示出来
+     1>daytime.cpp(37): warning C4244: “=”: 从“SOCKET”转换到“int”，可能丢失数据
+     1>daytime.cpp(40): warning C4996: 'sprintf': This function or variable may be unsafe. Consider using sprintf_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+                 D:\mysoft\VisualStudio2017\VC\include\stdio.h(371) : 参见“sprintf”的声明
+     1>daytime.cpp(40): warning C4996: 'ctime': This function or variable may be unsafe. Consider using ctime_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+                 D:\mysoft\VisualStudio2017\VC\include\time.inl(86) : 参见“ctime”的声明
+     1>daytime.cpp(42): warning C4267: “参数”: 从“size_t”转换到“int”，可能丢失数据
+         client.cpp
+     1>client.cpp(18): warning C4566: 由通用字符名称“\u00A0”表示的字符不能在当前代码页(936)中表示出来
+     1>client.cpp(18): warning C4566: 由通用字符名称“\u00A0”表示的字符不能在当前代码页(936)中表示出来
+     1>client.cpp(26): warning C4566: 由通用字符名称“\u00A0”表示的字符不能在当前代码页(936)中表示出来
+         Generating Code...
+       ManifestResourceCompile:
+         C:\Program Files (x86)\Microsoft SDKs\Windows\v7.0A\bin\rc.exe /nologo /fo"x64\Debug\da.exe.embed.manifest.res" x64\Debug\da_manifest.rc 
+       Link:
+         D:\mysoft\VisualStudio2017\VC\bin\x86_amd64\link.exe /ERRORREPORT:PROMPT /OUT:"D:\junior\vs\da\x64\Debug\da.exe" /INCREMENTAL /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib /MANIFEST /ManifestFile:"x64\Debug\da.exe.intermediate.manifest" /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /DEBUG /PDB:"D:\junior\vs\da\x64\Debug\da.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /DYNAMICBASE /NXCOMPAT /IMPLIB:"D:\junior\vs\da\x64\Debug\da.lib" /MACHINE:X64 x64\Debug\da.exe.embed.manifest.res
+         x64\Debug\client.obj
+         x64\Debug\daytime.obj
+     1>daytime.obj : error LNK2005: main 已经在 client.obj 中定义
+     1>client.obj : error LNK2019: 无法解析的外部符号 __imp_closesocket，该符号在函数 main 中被引用
+     1>daytime.obj : error LNK2001: 无法解析的外部符号 __imp_closesocket
+     1>client.obj : error LNK2019: 无法解析的外部符号 __imp_recv，该符号在函数 main 中被引用
+     1>client.obj : error LNK2019: 无法解析的外部符号 __imp_WSAGetLastError，该符号在函数 main 中被引用
+     1>client.obj : error LNK2019: 无法解析的外部符号 __imp_connect，该符号在函数 main 中被引用
+     1>client.obj : error LNK2019: 无法解析的外部符号 __imp_inet_addr，该符号在函数 main 中被引用
+     1>client.obj : error LNK2019: 无法解析的外部符号 __imp_htons，该符号在函数 main 中被引用
+     1>daytime.obj : error LNK2001: 无法解析的外部符号 __imp_htons
+     1>client.obj : error LNK2019: 无法解析的外部符号 __imp_socket，该符号在函数 main 中被引用
+     1>daytime.obj : error LNK2001: 无法解析的外部符号 __imp_socket
+     1>client.obj : error LNK2019: 无法解析的外部符号 __imp_WSAStartup，该符号在函数 main 中被引用
+     1>daytime.obj : error LNK2001: 无法解析的外部符号 __imp_WSAStartup
+     1>daytime.obj : error LNK2019: 无法解析的外部符号 __imp_send，该符号在函数 main 中被引用
+     1>daytime.obj : error LNK2019: 无法解析的外部符号 __imp_accept，该符号在函数 main 中被引用
+     1>daytime.obj : error LNK2019: 无法解析的外部符号 __imp_listen，该符号在函数 main 中被引用
+     1>daytime.obj : error LNK2019: 无法解析的外部符号 __imp_bind，该符号在函数 main 中被引用
+     1>daytime.obj : error LNK2019: 无法解析的外部符号 __imp_htonl，该符号在函数 main 中被引用
+     1>D:\junior\vs\da\x64\Debug\da.exe : fatal error LNK1120: 13 个无法解析的外部命令
+     1>已完成生成项目“D:\junior\vs\da\da\da.vcxproj”(build 个目标)的操作 - 失败。
+
+生成失败。
+
+已用时间 00:00:01.52

@@ -1,0 +1,6703 @@
+斩擞谢撼迩瑂end（）和recv（）函数其实只是实现copy功能，把缓冲区的内容拷出来。所以会出现缓冲区爆掉、接收接不全数据的情况。
+
+
+附上自己调试时写的小代码，仅供参考
+
+客户端实现的功能是，把一段1344000的数据（bmp图片的数据大小去掉54字节的header）发送给服务器端。文件流获取图片数据去图片头，模拟拍照等获取到的纯图片数据。实际传输的数据为1344000的数据。
+
+client.c
+
+#include <netinet/in.h>
+#include <sys/types.h>    
+#include <sys/socket.h>    
+#include <stdio.h>        
+#include <stdlib.h>       
+#include <string.h>      
+#include <time.h>                
+#include <arpa/inet.h>
+
+
+#define SERVER_PORT 6666
+#define BUFFER_SIZE 1024
+
+
+struct image_data{
+int value;
+unsigned char * imageData;
+int length;
+struct image_data * next;
+};
+
+
+
+
+int main(int argc,char **argv)
+{
+ if(argc!=2)
+  {
+      printf("参数错误，清输入两个参数\n");
+     exit(1);
+   }
+  FILE *stream;
+  struct sockaddr_in server_addr;
+   bzero(&server_addr,sizeof(server_addr)); 
+   server_addr.sin_family = AF_INET;    //internet协议族
+   server_addr.sin_addr.s_addr = inet_addr(argv[1]);
+   server_addr.sin_port = htons(SERVER_PORT);   
+   int sfd;
+   sfd=socket(AF_INET,SOCK_STREAM,0);
+   if(sfd<0)
+    {
+      printf("socket error\n");
+      exit(0);
+    }
+ 
+ 
+        int file_length;
+int tcpnum;
+int file_send_len;
+unsigned char snddata[1344000];
+unsigned char buffer[BUFFER_SIZE];
+file_length = sizeof(snddata);
+FILE *fp;
+    if (!(fp = fopen("1.bmp", "rb")))
+    {
+return -1;
+}
+fseek(fp, SEEK_SET, 54);
+    fread(snddata, sizeof(unsigned char), file_length, fp);
+fclose(fp);  
+struct image_data * temp_data = NULL;
+temp_data = (struct image_data *)malloc(sizeof(struct image_data));
+temp_data->imageData = (unsigned char *)malloc(sizeof(unsigned char) * file_length);
+temp_data ->imageData = snddata;
+temp_data ->length = file_length;
+ 
+ 
+   if(connect(sfd,(struct sockaddr*)&server_addr,sizeof(server_addr)) < 0)
+    {
+        printf("Can Not Connect To %s\n",argv[1]);
+        exit(1);
+    }
+
+
+    bzero(buffer,BUFFER_SIZE);
+    printf("正在传输...\n");
+    int len=0; 
+    //不断读取并发送数据
+
+
+tcpnum = file_length/BUFFER_SIZE;
+if((tcpnum * BUFFER_SIZE) < file_length)
+{
+tcpnum++;
+}
+printf("tcpnum = %d\n", tcpnum);
+int i;
+for(i = 0 ; i < tcpnum; i++)
+{
+
+if((file_length - i * BUFFER_SIZE) >= BUFFER_SIZE)
+{
+file_send_len = BUFFER_SIZE;
+}
+else
+{
+file_send_len = file_length - i * BUFFER_SIZE;
+} 
+bzero(buffer,BUFFER_SIZE);
+memcpy(buffer, temp_data->imageData + (i * BUFFER_SIZE), file_send_len);
+
+len  = send(sfd, buffer, file_send_len, 0);
+if(len < 0)
+{
+printf("send file error\n");
+break;
+}
+}
+close(sfd);
+printf("tcp over\n");
+
+
+    return 0;
+}
+
+
+
+
+server.c
+
+服务器端把数据存进一个数据，接收完之后，生成bmp图片。还可以直接存进文件（被注释了），但必须在客户端把图片header加上，一起发给服务器端。
+
+#include <netinet/in.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <string.h>
+#define SERVER_PORT 6666
+#define LISTEN_QUEUE 20
+#define BUFFER_SIZE 1024
+
+
+typedef struct tagRGBQUAD
+{
+    unsigned char rgbBlue;
+    unsigned char rgbGreen;
+    unsigned char rgbRed;
+} RGBQUAD; 
+static int youwritetobmp1(RGBQUAD*pixarr, int xsize, int ysize, int num) ;
+int num = 0;
+
+
+int main(int argc,char **argv)
+{
+  struct sockaddr_in server_addr;
+  bzero(&server_addr,sizeof(server_addr));//全部置零
+  //设置地址相关的属性
+  server_addr.sin_family=AF_INET;
+  server_addr.sin_addr.s_addr=htons(INADDR_ANY);
+  server_addr.sin_port=htons(SERVER_PORT);
+
+
+
+
+  //创建套接字
+  int server_socket=socket(AF_INET,SOCK_STREAM,0);
+  if(server_socket<0) 
+   {
+     printf("socket create error\n");
+     exit(1);
+   }
+  //绑定端口
+  if(bind(server_socket,(struct sockaddr*)&server_addr,sizeof(server_addr)))
+    {
+      printf("bind error\n");
+      exit(1);
+    }
+  //服务器端监听
+   if(listen(server_socket,LISTEN_QUEUE))
+    {
+      printf("Server listen error\n");
+      exit(1);
+    }
+
+
+  //服务器端一直运行
+  while(1)
+   {
+     pid_t pid;
+     struct sockaddr_in client_addr;
+     socklen_t length=sizeof(client_addr);
+     //accept返回一个新的套接字与客户端进行通信
+     int new_server_socket=accept(server_socket,(struct sockaddr*)&client_addr,&length);
+//1*begin******************************************************************************
+     if(new_server_socket==-1)
+      {
+        printf("accept error\n");
+        continue;
+      }
+     else
+      {
+        printf("客户端%s连接成功\n",inet_ntoa(client_addr.sin_addr));
+        pid=fork();
+ //3*begin**运行子进程*************************************************************
+        if(pid==0)
+         {
+           int data_len,flag=0;
+           char buffer[BUFFER_SIZE];
+           // 定义文件流
+           FILE *stream;
+           bzero(buffer,BUFFER_SIZE);
+           strcpy(buffer,"Please enter the total path");
+           strcat(buffer,"\n");
+           send(new_server_socket,buffer,BUFFER_SIZE,0);
+           bzero(buffer,BUFFER_SIZE);
+//2*begin**服务器接受数据*********************************************           
+          // if((stream=fopen("data","w"))==NULL)
+          //  {
+          //    printf("file open error\n");
+          //    exit(1);
+          //  }
+          // else
+          //  {
+          //    bzero(buffer,BUFFER_SIZE);
+          //  }
+
+
+unsigned char recv_data[1344000];
+int offset = 0;
+bzero(recv_data, 1344000);
+
+          // printf("正在接收来自%s的文件....\n",inet_ntoa(client_addr.sin_addr));
+           //先将数据接受到缓冲区buffer中，再写入到新建的文件中
+           while((data_len=recv(new_server_socket,buffer,BUFFER_SIZE,0)) > 0)
+            {
+               flag++;
+  printf("flag is %d\n",flag);
+  printf("data_len is %d\n",data_len);
+               if(flag==1)
+                {
+                 printf("正在接收来自%s的文件....\n",inet_ntoa(client_addr.sin_addr));
+                
+                }
+            
+              if(data_len<0)
+               {
+                printf("接收错误\n");
+                exit(1);
+               }
+              //向文件中写入数据
+              //int write_len=fwrite(buffer,sizeof(char),data_len,stream);
+              //if(write_len>data_len)
+              // {
+              //   printf("file write failed\n");
+              //   exit(1);
+              // }
+      printf("offset is %d\n",offset);
+      memcpy(recv_data + offset, buffer, data_len);
+              offset +=  data_len;
+              bzero(buffer,BUFFER_SIZE);
+            }
+          if(flag>0)
+             printf("%s的文件传送完毕\n",inet_ntoa(client_addr.sin_addr));
+           if(flag==0)
+             printf("%s的文件传输失败\n",inet_ntoa(client_addr.sin_addr));
+//2*end**服务器接受数据**************************************************** 
+         // rename("data",inet_ntoa(client_addr.sin_addr)); 
+          //fclose(stream);
+          //rename("data",inet_ntoa(client_addr.sin_addr));
+          
+ printf("to bmp file\n");
+          youwritetobmp1((RGBQUAD *) recv_data, 1280, 350, num);
+ num++;
+          exit(1);         
+         }
+//3*end**运行子进程**********************************************************
+        else
+         {
+           close(new_server_socket);
+         }
+      }
+//1*end**************************************************************************************
+   close(new_server_socket);
+   }
+ return 0;
+}
+
+
+
+/**描述：生成bmp图片
+
+**参数：1、图片数据  2、宽   3、长  4、保存图片区分字符
+
+*返回：0 成功  -1  不成功
+
+**/
+static int youwritetobmp1(RGBQUAD*pixarr, int xsize, int ysize, int num) 
+{
+       unsigned char header[54] = 
+{
+        0x42, 0x4d, 0, 0, 0, 0, 0, 
+          0, 0, 0,54, 0, 0, 0, 40, 0, 
+          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+          1, 0, 24, 0,0, 0, 0, 0, 0, 0, 
+          0, 0, 0, 0,0, 0, 0, 0, 0, 0,  
+          0, 0, 0, 0,0, 0, 0, 0
+      };
+
+      RGBQUAD * pixarr1; 
+      int i;
+      int j;
+      long file_size = (long)xsize * (long)ysize * 3 + 54;
+      header[2] = (unsigned char)(file_size &0x000000ff);
+      header[3] = (file_size >> 8)   & 0x000000ff;
+      header[4] = (file_size >> 16) & 0x000000ff;
+      header[5] = (file_size >> 24) & 0x000000ff;
+    
+      long width;
+      if(!(xsize%4))     width=xsize;
+      else                    width= xsize+(4-xsize%4);     //è?2?ê?4μ?±?êy￡??ò×a??3é4μ?±?êy
+      header[18] = width & 0x000000ff;
+      header[19] = (width >> 8) &0x000000ff;
+      header[20] = (width >> 16) &0x000000ff;
+      header[21] = (width >> 24) &0x000000ff;
+    
+      long height = ysize;
+      header[22] = height &0x000000ff;
+      header[23] = (height >> 8) &0x000000ff;
+      header[24] = (height >> 16) &0x000000ff;
+      header[25] = (height >> 24) &0x000000ff;
+
+
+      char fname_bmp[128];
+      sprintf(fname_bmp, "capture_%d.bmp",num);
+    
+      FILE *fp;
+      if (!(fp = fopen(fname_bmp, "wb"))) 
+      return -1;
+      
+      fwrite(header, sizeof(unsigned char), 54, fp);
+
+
+      RGBQUAD zero={0,0,0};   //2?×?×??ú￡?ó?zeroì?3?
+      pixarr1 = pixarr + xsize * (ysize -1);
+
+      for(j=0;j<ysize;j++)
+{
+          if(!(xsize%4))
+{
+              for(i=0;i<xsize;i++)
+    { 
+                  fwrite(pixarr1+i, sizeof(RGBQUAD),1, fp);
+              }
+      pixarr1 -=xsize; 
+          }
+          else
+          {
+              for(i=0;i<xsize;i++)
+{ 
+                  fwrite(pixarr+i, sizeof(RGBQUAD),1, fp);
+              }
+
+              for(i=xsize;i<xsize+(4-xsize%4);i++)
+{
+                  fwrite(&zero, sizeof(RGBQUAD),1, fp);
+              }
+          }
+     }
+    
+     fclose(fp);
+     return 0;
+
+
+}
+
+来至:http://blog.csdn.net/cbffyx/article/details/12614037
+目前您尚未登录，请 登录 或 注册 后进行评论
+
+    基于TCP的文件传输
+
+        IT_dreamer1993
+        IT_dreamer1993
+        2016-01-27 02:34:32
+        2319
+
+    之前文件传输问题的性能的优化，着重解决大文件传输速率和可行度的问题。...
+
+    网络编程——TCP文件传输
+
+        Volcano3511
+        Volcano3511
+        2016-12-10 08:01:52
+        2217
+
+    网络编程——TCP文件传输 网络编程TCP文件传输 要求  思路  结果  代码  客户端  服务端  要求- 客户端向服务端发起socket连接，建立数据传输通道- 客户端向服务端发送要传输的文件名...
+
+    免费学习千门课程，能塑造出一个什么样的程序员？
+    技术大牛都在，你还不来么？
+
+    TCP文件传输（一）
+
+        loveRooney
+        loveRooney
+        2014-07-30 17:16:50
+        4460
+
+    最近在做网络抓包和文件传输，今天遇到一个qi
+
+    TcpLister和TcpClient进行文件传输
+
+        u014800094
+        u014800094
+        2017-03-16 11:12:53
+        938
+
+    TCP是一种面向连接的，可靠的，基于字节流的传输层通信协议。TCP建立一个连接需要三次握手，而终止一个连接要经过四次握手。一旦通信双方建立了TCP连接，连接中的任何一方都能向对方发送数据和接受对方发来...
+
+    TCP发送文件（转）
+
+        hachirou
+        hachirou
+        2011-02-13 11:17:00
+        1358
+
+    001//文件传送线程//服务器发送文件，客户端发送文件消息002UINTthreadSendFile(LPVOIDpvar)003{004    CDlgSendMessage *pDlg = (C...
+
+    TCP数据传输（四）：上传文件操作（将客户端的文件发送到服务器）
+    TCP数据传输：上传文件操作（将客户端的文件发送到服务器）
+
+        wangyanming123
+        wangyanming123
+        2016-05-08 21:10:25
+        715
+
+    网络编程 基于TCP的多文件传输程序（二）
+
+        sinat_32660629
+        sinat_32660629
+        2016-11-26 22:25:50
+        1141
+
+    新人，Java学习中，文章中遗漏错误之处，欢迎斧正 个人博客，完全原创 转载请注明出处。 项目全代码地址：GitHub 前一期文章：网络编程 基于Socket的多文件传输程序实...
+
+    Linux网络编程之使用TCP传输文件
+
+        gqb666
+        gqb666
+        2013-05-26 14:59:19
+        9157
+
+    原创作品，转载时请务必以超链接形式标明文章原始出处:http://blog.csdn.net/gqb666/article/details/8976263,作者:gqb666          ...
+
+    Linux--TCPsocket传输图片
+
+        qq_28877125
+        qq_28877125
+        2017-04-06 01:32:17
+        964
+
+    服务器端/* server端代码：接受Client端发送过来的一个图片 */#include #include #include #include #include #i...
+
+    windows基于TCP/IP的简单文件/图片传输
+
+        Jammg
+        Jammg
+        2015-11-21 17:04:41
+        1635
+
+    详细函数资料参考msdn // TransPic_Server.cpp : 定义控制台应用程序的入口点。 /* Server.cpp */ // #include "stdafx.h" #inc...
+
+    Windows下基于TCP协议的大文件传输（流形式）
+    1 1 1 1 1 #ifndef TCPRECVFILE #define TCPRECVFILE #include #include #include #include #defi...
+
+        sty23122555
+        sty23122555
+        2016-06-20 22:38:41
+        4783
+
+    TCP文件传输系统（Version 1.6 多线程，断点续传，支持大文件传输）
+
+        2010年03月27日 21:49
+        2.6MB
+        下载
+
+    VS2010编写CSocket大文件TCP传送
+
+        2014年07月13日 10:17
+        281KB
+        下载
+
+    Socket网络程序设计（3） ———— 利用tcp完成文件传输的设计和实现
+    用TCP/TP进行网际互连（3）———— 利用tcp完成文件传输的设计和实现 1.利用循环面向连接的模型完成固定文件的传输 2.由固定文件扩展成手动输入或选择文件 3.参考connectT...
+
+        KevinBetterQ
+        KevinBetterQ
+        2017-08-10 09:55:37
+        597
+
+    Linux C TCPSocket 传输文件简单实例-多线程实现
+    在Linux下使用C语言TCPSocket实现简单文件传输，包括客户端和服务器端，其中，服务器端使用多线程实现同时接收多个客户端发送的文件。发送文件内容之前，首先需要将文件名和长度信息发送到服务器，为...
+
+        wanna_wsl
+        wanna_wsl
+        2016-12-21 22:04:14
+        3262
+
+    TCP文件上传案例
+
+        u012315155
+        u012315155
+        2016-03-07 22:28:02
+        638
+
+    文件上传分析： 所谓的文件上传（客户端）就是首先的通过输入流将文件读取到内存中，然后在后再通过套接字输出流将文件写入到服务器端，然后就可以通过套接字输入流来读取服务器端返回的结果了。具体的事例代码如下...
+
+    网络编程--实现跨平台传输文件（TCP版）
+
+        2015年03月31日 17:26
+        127KB
+        下载
+
+    TCP文件传输
+
+        JoeBlackzqq
+        JoeBlackzqq
+        2011-11-08 13:44:31
+        640
+
+    下面是一个简单的TCP文件传输的例子，实现环境：Linux C Server.c // 向客户端发送文件 #include #include #include #include ...
+
+    tcp 文件传输
+
+        2012年02月14日 18:33
+        3.17MB
+        下载
+
+    木之子
+
+原创
+    48
+
+粉丝
+    37
+
+喜欢
+    7
+
+评论
+    10
+
+持之以恒
+等级： 5级,点击查看等级说明
+访问量： 19万+
+积分： 2861
+排名： 1万+
+博主最新文章
+更多文章
+
+    sqlite开发例子
+    sqlite语法网址
+    arm板上sqlite3移植及使用
+    结构体中指针赋值问题的分析及C代码示例
+    arm下移植json-c-0.9
+
+文章分类
+
+    c语言面试
+    43篇
+    linux命令
+    12篇
+    dm8168
+    17篇
+    dm8168-dsp
+    13篇
+    AUDIO
+    4篇
+    linux驱动编程
+    6篇
+    linux网络编程
+    17篇
+    linux搭环境
+    1篇
+    linux驱动知识
+    13篇
+    video
+    9篇
+    video面试
+    1篇
+    H264
+    5篇
+    MPEG4
+    3篇
+    网络（tcp
+    6篇
+    linux应用程序编程
+    40篇
+    Hi35xx
+    3篇
+    Ubuntu的搭环境
+    1篇
+    code
+    10篇
+    STM32 CAN 控制器
+    1篇
+    error
+    2篇
+    wifi
+    17篇
+    Makefile
+    12篇
+    git
+    1篇
+    bash脚本语法
+    1篇
+    wireshark常用的过滤命令
+    1篇
+    gcc
+    1篇
+    spi
+    6篇
+    矢量字形库
+    1篇
+    sd和usb自动检测
+    1篇
+    Source Insight
+    1篇
+    yuv
+    2篇
+    linux面试
+    1篇
+    DVB
+    1篇
+    SSL
+    1篇
+    gsm
+    2篇
+    shell
+    2篇
+    linux内核链表
+    4篇
+    V4L2
+    1篇
+    fifo循环队列
+    3篇
+    json-c
+    2篇
+    画流程图的工具
+    1篇
+    sqlite
+    7篇
+    Android驱动
+    13篇
+    Zwave
+    6篇
+    rs232和rs485
+    1篇
+    cloud39
+    1篇
+    onvif
+    1篇
+    ffmpeg
+    4篇
+    链表
+    1篇
+    CRC16校验C语言程序源码
+    2篇
+
+展开
+文章存档
+
+    2018年4月
+    5篇
+    2017年11月
+    1篇
+    2017年10月
+    1篇
+    2017年8月
+    6篇
+    2017年7月
+    3篇
+    2017年6月
+    2篇
+    2017年5月
+    1篇
+    2017年4月
+    1篇
+    2017年3月
+    4篇
+    2017年2月
+    1篇
+    2017年1月
+    1篇
+    2016年12月
+    3篇
+    2016年11月
+    2篇
+    2016年10月
+    3篇
+    2016年8月
+    5篇
+    2016年7月
+    4篇
+    2016年5月
+    4篇
+    2016年4月
+    20篇
+    2016年3月
+    6篇
+    2016年2月
+    10篇
+    2016年1月
+    7篇
+    2015年12月
+    5篇
+    2015年11月
+    6篇
+    2015年10月
+    8篇
+    2015年9月
+    4篇
+    2015年8月
+    3篇
+    2015年7月
+    2篇
+    2015年6月
+    13篇
+    2015年5月
+    6篇
+    2015年4月
+    19篇
+    2015年3月
+    11篇
+    2015年2月
+    5篇
+    2015年1月
+    28篇
+    2014年12月
+    17篇
+    2014年11月
+    5篇
+    2014年10月
+    5篇
+    2014年9月
+    15篇
+    2014年8月
+    22篇
+    2014年7月
+    20篇
+    2014年6月
+    18篇
+    2014年5月
+    39篇
+    2013年10月
+    1篇
+
+展开
+博主热门文章
+
+    当前已提供的各国NTP服务器列表
+    3616
+    linux下检测U盘插入并读取文件
+    3400
+    SIM800H NTP网络授时
+    2819
+    音频编解码介绍
+    2771
+    好东西！sqlite3中BLOB数据类型存储大对象运用示例
+    2698
+    yuv420sp旋转90度
+    2476
+    C语言经典面试题目
+    2382
+    SIM900 / SIM800 USSD代码命令 - 工作实例
+    2233
+    UDP局域网内广播消息
+    1958
+    SQLite中如何用api操作BLOB类型的字段
+    1850
+
+联系我们
+客服
+请扫描二维码联系客服
+
+webmaster@csdn.net
+
+400-660-0108
+
+QQ客服 客服论坛
+
+关于招聘广告服务 百度
+
+?1999-2018 CSDN版权所有
+
+京ICP证09002463号
+
+经营性网站备案信息
+
+网络110报警服务
+
+中国互联网举报中心
+
+北京互联网违法和不良信息举报中心
+
+加入CSDN，享受更精准的内容推荐，与500万程序员共同成长！
+登录
+注册
+
+
+    博客
+    学院
+    下载
+    GitChat
+    论坛
+    问答
+    商城
+    VIP
+    活动
+    招聘
+    ITeye
+    码云
+    CSTO
+
+    写博客
+    发Chat
+    登录注册
+
+TCP传输大文件（图片、文档）
+转载 2017年08月28日 18:35:18
+
+遇到TCP传输大文件问题，主要是
+
+（1）、传输快，但拼接成的大文件数据错
+
+（2）、加校验，传输变慢
+
+（3）、接收包数跟发送包数不对应
+
+费了一段时间才解决。
+
+今天，整理一下，留以后备用。
+
+首先，TCP是有连接、自带校验的传输协议，不需要再另外加代码(如接收端回复码给发送端)确保其正确性，这样可以保证TCP的速度，基本能达到4M/s以上。
+
+
+如接收包数和发送包数不一致，这只是说两边发送、接收的速度不对应，发送慢、接受快了，就会出现接收的次数多（不信你可以找找，你接收的数据个数中肯定有小于BUFFER_SIZE的）。所以在拼接成大文件时，就不能按照预设的size进行，应该按照实际接收到的数据size进行偏移。
+
+
+TCP传输时，发送端和接收端有缓冲区，send（）和recv（）函数其实只是实现copy功能，把缓冲区的内容拷出来。所以会出现缓冲区爆掉、接收接不全数据的情况。
+
+
+附上自己调试时写的小代码，仅供参考
+
+客户端实现的功能是，把一段1344000的数据（bmp图片的数据大小去掉54字节的header）发送给服务器端。文件流获取图片数据去图片头，模拟拍照等获取到的纯图片数据。实际传输的数据为1344000的数据。
+
+client.c
+
+#include <netinet/in.h>
+#include <sys/types.h>    
+#include <sys/socket.h>    
+#include <stdio.h>        
+#include <stdlib.h>       
+#include <string.h>      
+#include <time.h>                
+#include <arpa/inet.h>
+
+
+#define SERVER_PORT 6666
+#define BUFFER_SIZE 1024
+
+
+struct image_data{
+int value;
+unsigned char * imageData;
+int length;
+struct image_data * next;
+};
+
+
+
+
+int main(int argc,char **argv)
+{
+ if(argc!=2)
+  {
+      printf("参数错误，清输入两个参数\n");
+     exit(1);
+   }
+  FILE *stream;
+  struct sockaddr_in server_addr;
+   bzero(&server_addr,sizeof(server_addr)); 
+   server_addr.sin_family = AF_INET;    //internet协议族
+   server_addr.sin_addr.s_addr = inet_addr(argv[1]);
+   server_addr.sin_port = htons(SERVER_PORT);   
+   int sfd;
+   sfd=socket(AF_INET,SOCK_STREAM,0);
+   if(sfd<0)
+    {
+      printf("socket error\n");
+      exit(0);
+    }
+ 
+ 
+        int file_length;
+int tcpnum;
+int file_send_len;
+unsigned char snddata[1344000];
+unsigned char buffer[BUFFER_SIZE];
+file_length = sizeof(snddata);
+FILE *fp;
+    if (!(fp = fopen("1.bmp", "rb")))
+    {
+return -1;
+}
+fseek(fp, SEEK_SET, 54);
+    fread(snddata, sizeof(unsigned char), file_length, fp);
+fclose(fp);  
+struct image_data * temp_data = NULL;
+temp_data = (struct image_data *)malloc(sizeof(struct image_data));
+temp_data->imageData = (unsigned char *)malloc(sizeof(unsigned char) * file_length);
+temp_data ->imageData = snddata;
+temp_data ->length = file_length;
+ 
+ 
+   if(connect(sfd,(struct sockaddr*)&server_addr,sizeof(server_addr)) < 0)
+    {
+        printf("Can Not Connect To %s\n",argv[1]);
+        exit(1);
+    }
+
+
+    bzero(buffer,BUFFER_SIZE);
+    printf("正在传输...\n");
+    int len=0; 
+    //不断读取并发送数据
+
+
+tcpnum = file_length/BUFFER_SIZE;
+if((tcpnum * BUFFER_SIZE) < file_length)
+{
+tcpnum++;
+}
+printf("tcpnum = %d\n", tcpnum);
+int i;
+for(i = 0 ; i < tcpnum; i++)
+{
+
+if((file_length - i * BUFFER_SIZE) >= BUFFER_SIZE)
+{
+file_send_len = BUFFER_SIZE;
+}
+else
+{
+file_send_len = file_length - i * BUFFER_SIZE;
+} 
+bzero(buffer,BUFFER_SIZE);
+memcpy(buffer, temp_data->imageData + (i * BUFFER_SIZE), file_send_len);
+
+len  = send(sfd, buffer, file_send_len, 0);
+if(len < 0)
+{
+printf("send file error\n");
+break;
+}
+}
+close(sfd);
+printf("tcp over\n");
+
+
+    return 0;
+}
+
+
+
+
+server.c
+
+服务器端把数据存进一个数据，接收完之后，生成bmp图片。还可以直接存进文件（被注释了），但必须在客户端把图片header加上，一起发给服务器端。
+
+#include <netinet/in.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <string.h>
+#define SERVER_PORT 6666
+#define LISTEN_QUEUE 20
+#define BUFFER_SIZE 1024
+
+
+typedef struct tagRGBQUAD
+{
+    unsigned char rgbBlue;
+    unsigned char rgbGreen;
+    unsigned char rgbRed;
+} RGBQUAD; 
+static int youwritetobmp1(RGBQUAD*pixarr, int xsize, int ysize, int num) ;
+int num = 0;
+
+
+int main(int argc,char **argv)
+{
+  struct sockaddr_in server_addr;
+  bzero(&server_addr,sizeof(server_addr));//全部置零
+  //设置地址相关的属性
+  server_addr.sin_family=AF_INET;
+  server_addr.sin_addr.s_addr=htons(INADDR_ANY);
+  server_addr.sin_port=htons(SERVER_PORT);
+
+
+
+
+  //创建套接字
+  int server_socket=socket(AF_INET,SOCK_STREAM,0);
+  if(server_socket<0) 
+   {
+     printf("socket create error\n");
+     exit(1);
+   }
+  //绑定端口
+  if(bind(server_socket,(struct sockaddr*)&server_addr,sizeof(server_addr)))
+    {
+      printf("bind error\n");
+      exit(1);
+    }
+  //服务器端监听
+   if(listen(server_socket,LISTEN_QUEUE))
+    {
+      printf("Server listen error\n");
+      exit(1);
+    }
+
+
+  //服务器端一直运行
+  while(1)
+   {
+     pid_t pid;
+     struct sockaddr_in client_addr;
+     socklen_t length=sizeof(client_addr);
+     //accept返回一个新的套接字与客户端进行通信
+     int new_server_socket=accept(server_socket,(struct sockaddr*)&client_addr,&length);
+//1*begin******************************************************************************
+     if(new_server_socket==-1)
+      {
+        printf("accept error\n");
+        continue;
+      }
+     else
+      {
+        printf("客户端%s连接成功\n",inet_ntoa(client_addr.sin_addr));
+        pid=fork();
+ //3*begin**运行子进程*************************************************************
+        if(pid==0)
+         {
+           int data_len,flag=0;
+           char buffer[BUFFER_SIZE];
+           // 定义文件流
+           FILE *stream;
+           bzero(buffer,BUFFER_SIZE);
+           strcpy(buffer,"Please enter the total path");
+           strcat(buffer,"\n");
+           send(new_server_socket,buffer,BUFFER_SIZE,0);
+           bzero(buffer,BUFFER_SIZE);
+//2*begin**服务器接受数据*********************************************           
+          // if((stream=fopen("data","w"))==NULL)
+          //  {
+          //    printf("file open error\n");
+          //    exit(1);
+          //  }
+          // else
+          //  {
+          //    bzero(buffer,BUFFER_SIZE);
+          //  }
+
+
+unsigned char recv_data[1344000];
+int offset = 0;
+bzero(recv_data, 1344000);
+
+          // printf("正在接收来自%s的文件....\n",inet_ntoa(client_addr.sin_addr));
+           //先将数据接受到缓冲区buffer中，再写入到新建的文件中
+           while((data_len=recv(new_server_socket,buffer,BUFFER_SIZE,0)) > 0)
+            {
+               flag++;
+  printf("flag is %d\n",flag);
+  printf("data_len is %d\n",data_len);
+               if(flag==1)
+                {
+                 printf("正在接收来自%s的文件....\n",inet_ntoa(client_addr.sin_addr));
+                
+                }
+            
+              if(data_len<0)
+               {
+                printf("接收错误\n");
+                exit(1);
+               }
+              //向文件中写入数据
+              //int write_len=fwrite(buffer,sizeof(char),data_len,stream);
+              //if(write_len>data_len)
+              // {
+              //   printf("file write failed\n");
+              //   exit(1);
+              // }
+      printf("offset is %d\n",offset);
+      memcpy(recv_data + offset, buffer, data_len);
+              offset +=  data_len;
+              bzero(buffer,BUFFER_SIZE);
+            }
+          if(flag>0)
+             printf("%s的文件传送完毕\n",inet_ntoa(client_addr.sin_addr));
+           if(flag==0)
+             printf("%s的文件传输失败\n",inet_ntoa(client_addr.sin_addr));
+//2*end**服务器接受数据**************************************************** 
+         // rename("data",inet_ntoa(client_addr.sin_addr)); 
+          //fclose(stream);
+          //rename("data",inet_ntoa(client_addr.sin_addr));
+          
+ printf("to bmp file\n");
+          youwritetobmp1((RGBQUAD *) recv_data, 1280, 350, num);
+ num++;
+          exit(1);         
+         }
+//3*end**运行子进程**********************************************************
+        else
+         {
+           close(new_server_socket);
+         }
+      }
+//1*end**************************************************************************************
+   close(new_server_socket);
+   }
+ return 0;
+}
+
+
+
+/**描述：生成bmp图片
+
+**参数：1、图片数据  2、宽   3、长  4、保存图片区分字符
+
+*返回：0 成功  -1  不成功
+
+**/
+static int youwritetobmp1(RGBQUAD*pixarr, int xsize, int ysize, int num) 
+{
+       unsigned char header[54] = 
+{
+        0x42, 0x4d, 0, 0, 0, 0, 0, 
+          0, 0, 0,54, 0, 0, 0, 40, 0, 
+          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+          1, 0, 24, 0,0, 0, 0, 0, 0, 0, 
+          0, 0, 0, 0,0, 0, 0, 0, 0, 0,  
+          0, 0, 0, 0,0, 0, 0, 0
+      };
+
+      RGBQUAD * pixarr1; 
+      int i;
+      int j;
+      long file_size = (long)xsize * (long)ysize * 3 + 54;
+      header[2] = (unsigned char)(file_size &0x000000ff);
+      header[3] = (file_size >> 8)   & 0x000000ff;
+      header[4] = (file_size >> 16) & 0x000000ff;
+      header[5] = (file_size >> 24) & 0x000000ff;
+    
+      long width;
+      if(!(xsize%4))     width=xsize;
+      else                    width= xsize+(4-xsize%4);     //è?2?ê?4μ?±?êy￡??ò×a??3é4μ?±?êy
+      header[18] = width & 0x000000ff;
+      header[19] = (width >> 8) &0x000000ff;
+      header[20] = (width >> 16) &0x000000ff;
+      header[21] = (width >> 24) &0x000000ff;
+    
+      long height = ysize;
+      header[22] = height &0x000000ff;
+      header[23] = (height >> 8) &0x000000ff;
+      header[24] = (height >> 16) &0x000000ff;
+      header[25] = (height >> 24) &0x000000ff;
+
+
+      char fname_bmp[128];
+      sprintf(fname_bmp, "capture_%d.bmp",num);
+    
+      FILE *fp;
+      if (!(fp = fopen(fname_bmp, "wb"))) 
+      return -1;
+      
+      fwrite(header, sizeof(unsigned char), 54, fp);
+
+
+      RGBQUAD zero={0,0,0};   //2?×?×??ú￡?ó?zeroì?3?
+      pixarr1 = pixarr + xsize * (ysize -1);
+
+      for(j=0;j<ysize;j++)
+{
+          if(!(xsize%4))
+{
+              for(i=0;i<xsize;i++)
+    { 
+                  fwrite(pixarr1+i, sizeof(RGBQUAD),1, fp);
+              }
+      pixarr1 -=xsize; 
+          }
+          else
+          {
+              for(i=0;i<xsize;i++)
+{ 
+                  fwrite(pixarr+i, sizeof(RGBQUAD),1, fp);
+              }
+
+              for(i=xsize;i<xsize+(4-xsize%4);i++)
+{
+                  fwrite(&zero, sizeof(RGBQUAD),1, fp);
+              }
+          }
+     }
+    
+     fclose(fp);
+     return 0;
+
+
+}
+
+来至:http://blog.csdn.net/cbffyx/article/details/12614037
+目前您尚未登录，请 登录 或 注册 后进行评论
+
+    基于TCP的文件传输
+
+        IT_dreamer1993
+        IT_dreamer1993
+        2016-01-27 02:34:32
+        2319
+
+    之前文件传输问题的性能的优化，着重解决大文件传输速率和可行度的问题。...
+
+    网络编程——TCP文件传输
+
+        Volcano3511
+        Volcano3511
+        2016-12-10 08:01:52
+        2217
+
+    网络编程——TCP文件传输 网络编程TCP文件传输 要求  思路  结果  代码  客户端  服务端  要求- 客户端向服务端发起socket连接，建立数据传输通道- 客户端向服务端发送要传输的文件名...
+
+    免费学习千门课程，能塑造出一个什么样的程序员？
+    技术大牛都在，你还不来么？
+
+    TCP文件传输（一）
+
+        loveRooney
+        loveRooney
+        2014-07-30 17:16:50
+        4460
+
+    最近在做网络抓包和文件传输，今天遇到一个qi
+
+    TcpLister和TcpClient进行文件传输
+
+        u014800094
+        u014800094
+        2017-03-16 11:12:53
+        938
+
+    TCP是一种面向连接的，可靠的，基于字节流的传输层通信协议。TCP建立一个连接需要三次握手，而终止一个连接要经过四次握手。一旦通信双方建立了TCP连接，连接中的任何一方都能向对方发送数据和接受对方发来...
+
+    TCP发送文件（转）
+
+        hachirou
+        hachirou
+        2011-02-13 11:17:00
+        1358
+
+    001//文件传送线程//服务器发送文件，客户端发送文件消息002UINTthreadSendFile(LPVOIDpvar)003{004    CDlgSendMessage *pDlg = (C...
+
+    TCP数据传输（四）：上传文件操作（将客户端的文件发送到服务器）
+    TCP数据传输：上传文件操作（将客户端的文件发送到服务器）
+
+        wangyanming123
+        wangyanming123
+        2016-05-08 21:10:25
+        715
+
+    网络编程 基于TCP的多文件传输程序（二）
+
+        sinat_32660629
+        sinat_32660629
+        2016-11-26 22:25:50
+        1141
+
+    新人，Java学习中，文章中遗漏错误之处，欢迎斧正 个人博客，完全原创 转载请注明出处。 项目全代码地址：GitHub 前一期文章：网络编程 基于Socket的多文件传输程序实...
+
+    Linux网络编程之使用TCP传输文件
+
+        gqb666
+        gqb666
+        2013-05-26 14:59:19
+        9157
+
+    原创作品，转载时请务必以超链接形式标明文章原始出处:http://blog.csdn.net/gqb666/article/details/8976263,作者:gqb666          ...
+
+    Linux--TCPsocket传输图片
+
+        qq_28877125
+        qq_28877125
+        2017-04-06 01:32:17
+        964
+
+    服务器端/* server端代码：接受Client端发送过来的一个图片 */#include #include #include #include #include #i...
+
+    windows基于TCP/IP的简单文件/图片传输
+
+        Jammg
+        Jammg
+        2015-11-21 17:04:41
+        1635
+
+    详细函数资料参考msdn // TransPic_Server.cpp : 定义控制台应用程序的入口点。 /* Server.cpp */ // #include "stdafx.h" #inc...
+
+    Windows下基于TCP协议的大文件传输（流形式）
+    1 1 1 1 1 #ifndef TCPRECVFILE #define TCPRECVFILE #include #include #include #include #defi...
+
+        sty23122555
+        sty23122555
+        2016-06-20 22:38:41
+        4783
+
+    TCP文件传输系统（Version 1.6 多线程，断点续传，支持大文件传输）
+
+        2010年03月27日 21:49
+        2.6MB
+        下载
+
+    VS2010编写CSocket大文件TCP传送
+
+        2014年07月13日 10:17
+        281KB
+        下载
+
+    Socket网络程序设计（3） ———— 利用tcp完成文件传输的设计和实现
+    用TCP/TP进行网际互连（3）———— 利用tcp完成文件传输的设计和实现 1.利用循环面向连接的模型完成固定文件的传输 2.由固定文件扩展成手动输入或选择文件 3.参考connectT...
+
+        KevinBetterQ
+        KevinBetterQ
+        2017-08-10 09:55:37
+        597
+
+    Linux C TCPSocket 传输文件简单实例-多线程实现
+    在Linux下使用C语言TCPSocket实现简单文件传输，包括客户端和服务器端，其中，服务器端使用多线程实现同时接收多个客户端发送的文件。发送文件内容之前，首先需要将文件名和长度信息发送到服务器，为...
+
+        wanna_wsl
+        wanna_wsl
+        2016-12-21 22:04:14
+        3262
+
+    TCP文件上传案例
+
+        u012315155
+        u012315155
+        2016-03-07 22:28:02
+        638
+
+    文件上传分析： 所谓的文件上传（客户端）就是首先的通过输入流将文件读取到内存中，然后在后再通过套接字输出流将文件写入到服务器端，然后就可以通过套接字输入流来读取服务器端返回的结果了。具体的事例代码如下...
+
+    网络编程--实现跨平台传输文件（TCP版）
+
+        2015年03月31日 17:26
+        127KB
+        下载
+
+    TCP文件传输
+
+        JoeBlackzqq
+        JoeBlackzqq
+        2011-11-08 13:44:31
+        640
+
+    下面是一个简单的TCP文件传输的例子，实现环境：Linux C Server.c // 向客户端发送文件 #include #include #include #include ...
+
+    tcp 文件传输
+
+        2012年02月14日 18:33
+        3.17MB
+        下载
+
+    木之子
+
+原创
+    48
+
+粉丝
+    37
+
+喜欢
+    7
+
+评论
+    10
+
+持之以恒
+等级： 5级,点击查看等级说明
+访问量： 19万+
+积分： 2861
+排名： 1万+
+博主最新文章
+更多文章
+
+    sqlite开发例子
+    sqlite语法网址
+    arm板上sqlite3移植及使用
+    结构体中指针赋值问题的分析及C代码示例
+    arm下移植json-c-0.9
+
+文章分类
+
+    c语言面试
+    43篇
+    linux命令
+    12篇
+    dm8168
+    17篇
+    dm8168-dsp
+    13篇
+    AUDIO
+    4篇
+    linux驱动编程
+    6篇
+    linux网络编程
+    17篇
+    linux搭环境
+    1篇
+    linux驱动知识
+    13篇
+    video
+    9篇
+    video面试
+    1篇
+    H264
+    5篇
+    MPEG4
+    3篇
+    网络（tcp
+    6篇
+    linux应用程序编程
+    40篇
+    Hi35xx
+    3篇
+    Ubuntu的搭环境
+    1篇
+    code
+    10篇
+    STM32 CAN 控制器
+    1篇
+    error
+    2篇
+    wifi
+    17篇
+    Makefile
+    12篇
+    git
+    1篇
+    bash脚本语法
+    1篇
+    wireshark常用的过滤命令
+    1篇
+    gcc
+    1篇
+    spi
+    6篇
+    矢量字形库
+    1篇
+    sd和usb自动检测
+    1篇
+    Source Insight
+    1篇
+    yuv
+    2篇
+    linux面试
+    1篇
+    DVB
+    1篇
+    SSL
+    1篇
+    gsm
+    2篇
+    shell
+    2篇
+    linux内核链表
+    4篇
+    V4L2
+    1篇
+    fifo循环队列
+    3篇
+    json-c
+    2篇
+    画流程图的工具
+    1篇
+    sqlite
+    7篇
+    Android驱动
+    13篇
+    Zwave
+    6篇
+    rs232和rs485
+    1篇
+    cloud39
+    1篇
+    onvif
+    1篇
+    ffmpeg
+    4篇
+    链表
+    1篇
+    CRC16校验C语言程序源码
+    2篇
+
+展开
+文章存档
+
+    2018年4月
+    5篇
+    2017年11月
+    1篇
+    2017年10月
+    1篇
+    2017年8月
+    6篇
+    2017年7月
+    3篇
+    2017年6月
+    2篇
+    2017年5月
+    1篇
+    2017年4月
+    1篇
+    2017年3月
+    4篇
+    2017年2月
+    1篇
+    2017年1月
+    1篇
+    2016年12月
+    3篇
+    2016年11月
+    2篇
+    2016年10月
+    3篇
+    2016年8月
+    5篇
+    2016年7月
+    4篇
+    2016年5月
+    4篇
+    2016年4月
+    20篇
+    2016年3月
+    6篇
+    2016年2月
+    10篇
+    2016年1月
+    7篇
+    2015年12月
+    5篇
+    2015年11月
+    6篇
+    2015年10月
+    8篇
+    2015年9月
+    4篇
+    2015年8月
+    3篇
+    2015年7月
+    2篇
+    2015年6月
+    13篇
+    2015年5月
+    6篇
+    2015年4月
+    19篇
+    2015年3月
+    11篇
+    2015年2月
+    5篇
+    2015年1月
+    28篇
+    2014年12月
+    17篇
+    2014年11月
+    5篇
+    2014年10月
+    5篇
+    2014年9月
+    15篇
+    2014年8月
+    22篇
+    2014年7月
+    20篇
+    2014年6月
+    18篇
+    2014年5月
+    39篇
+    2013年10月
+    1篇
+
+展开
+博主热门文章
+
+    当前已提供的各国NTP服务器列表
+    3616
+    linux下检测U盘插入并读取文件
+    3400
+    SIM800H NTP网络授时
+    2819
+    音频编解码介绍
+    2771
+    好东西！sqlite3中BLOB数据类型存储大对象运用示例
+    2698
+    yuv420sp旋转90度
+    2476
+    C语言经典面试题目
+    2382
+    SIM900 / SIM800 USSD代码命令 - 工作实例
+    2233
+    UDP局域网内广播消息
+    1958
+    SQLite中如何用api操作BLOB类型的字段
+    1850
+
+联系我们
+客服
+请扫描二维码联系客服
+
+webmaster@csdn.net
+
+400-660-0108
+
+QQ客服 客服论坛
+
+关于招聘广告服务 百度
+
+?1999-2018 CSDN版权所有
+
+京ICP证09002463号
+
+经营性网站备案信息
+
+网络110报警服务
+
+中国互联网举报中心
+
+北京互联网违法和不良信息举报中心
+
+加入CSDN，享受更精准的内容推荐，与500万程序员共同成长！
+登录
+注册
+
+
+    博客
+    学院
+    下载
+    GitChat
+    论坛
+    问答
+    商城
+    VIP
+    活动
+    招聘
+    ITeye
+    码云
+    CSTO
+
+    写博客
+    发Chat
+    登录注册
+
+TCP传输大文件（图片、文档）
+转载 2017年08月28日 18:35:18
+
+遇到TCP传输大文件问题，主要是
+
+（1）、传输快，但拼接成的大文件数据错
+
+（2）、加校验，传输变慢
+
+（3）、接收包数跟发送包数不对应
+
+费了一段时间才解决。
+
+今天，整理一下，留以后备用。
+
+首先，TCP是有连接、自带校验的传输协议，不需要再另外加代码(如接收端回复码给发送端)确保其正确性，这样可以保证TCP的速度，基本能达到4M/s以上。
+
+
+如接收包数和发送包数不一致，这只是说两边发送、接收的速度不对应，发送慢、接受快了，就会出现接收的次数多（不信你可以找找，你接收的数据个数中肯定有小于BUFFER_SIZE的）。所以在拼接成大文件时，就不能按照预设的size进行，应该按照实际接收到的数据size进行偏移。
+
+
+TCP传输时，发送端和接收端有缓冲区，send（）和recv（）函数其实只是实现copy功能，把缓冲区的内容拷出来。所以会出现缓冲区爆掉、接收接不全数据的情况。
+
+
+附上自己调试时写的小代码，仅供参考
+
+客户端实现的功能是，把一段1344000的数据（bmp图片的数据大小去掉54字节的header）发送给服务器端。文件流获取图片数据去图片头，模拟拍照等获取到的纯图片数据。实际传输的数据为1344000的数据。
+
+client.c
+
+#include <netinet/in.h>
+#include <sys/types.h>    
+#include <sys/socket.h>    
+#include <stdio.h>        
+#include <stdlib.h>       
+#include <string.h>      
+#include <time.h>                
+#include <arpa/inet.h>
+
+
+#define SERVER_PORT 6666
+#define BUFFER_SIZE 1024
+
+
+struct image_data{
+int value;
+unsigned char * imageData;
+int length;
+struct image_data * next;
+};
+
+
+
+
+int main(int argc,char **argv)
+{
+ if(argc!=2)
+  {
+      printf("参数错误，清输入两个参数\n");
+     exit(1);
+   }
+  FILE *stream;
+  struct sockaddr_in server_addr;
+   bzero(&server_addr,sizeof(server_addr)); 
+   server_addr.sin_family = AF_INET;    //internet协议族
+   server_addr.sin_addr.s_addr = inet_addr(argv[1]);
+   server_addr.sin_port = htons(SERVER_PORT);   
+   int sfd;
+   sfd=socket(AF_INET,SOCK_STREAM,0);
+   if(sfd<0)
+    {
+      printf("socket error\n");
+      exit(0);
+    }
+ 
+ 
+        int file_length;
+int tcpnum;
+int file_send_len;
+unsigned char snddata[1344000];
+unsigned char buffer[BUFFER_SIZE];
+file_length = sizeof(snddata);
+FILE *fp;
+    if (!(fp = fopen("1.bmp", "rb")))
+    {
+return -1;
+}
+fseek(fp, SEEK_SET, 54);
+    fread(snddata, sizeof(unsigned char), file_length, fp);
+fclose(fp);  
+struct image_data * temp_data = NULL;
+temp_data = (struct image_data *)malloc(sizeof(struct image_data));
+temp_data->imageData = (unsigned char *)malloc(sizeof(unsigned char) * file_length);
+temp_data ->imageData = snddata;
+temp_data ->length = file_length;
+ 
+ 
+   if(connect(sfd,(struct sockaddr*)&server_addr,sizeof(server_addr)) < 0)
+    {
+        printf("Can Not Connect To %s\n",argv[1]);
+        exit(1);
+    }
+
+
+    bzero(buffer,BUFFER_SIZE);
+    printf("正在传输...\n");
+    int len=0; 
+    //不断读取并发送数据
+
+
+tcpnum = file_length/BUFFER_SIZE;
+if((tcpnum * BUFFER_SIZE) < file_length)
+{
+tcpnum++;
+}
+printf("tcpnum = %d\n", tcpnum);
+int i;
+for(i = 0 ; i < tcpnum; i++)
+{
+
+if((file_length - i * BUFFER_SIZE) >= BUFFER_SIZE)
+{
+file_send_len = BUFFER_SIZE;
+}
+else
+{
+file_send_len = file_length - i * BUFFER_SIZE;
+} 
+bzero(buffer,BUFFER_SIZE);
+memcpy(buffer, temp_data->imageData + (i * BUFFER_SIZE), file_send_len);
+
+len  = send(sfd, buffer, file_send_len, 0);
+if(len < 0)
+{
+printf("send file error\n");
+break;
+}
+}
+close(sfd);
+printf("tcp over\n");
+
+
+    return 0;
+}
+
+
+
+
+server.c
+
+服务器端把数据存进一个数据，接收完之后，生成bmp图片。还可以直接存进文件（被注释了），但必须在客户端把图片header加上，一起发给服务器端。
+
+#include <netinet/in.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <string.h>
+#define SERVER_PORT 6666
+#define LISTEN_QUEUE 20
+#define BUFFER_SIZE 1024
+
+
+typedef struct tagRGBQUAD
+{
+    unsigned char rgbBlue;
+    unsigned char rgbGreen;
+    unsigned char rgbRed;
+} RGBQUAD; 
+static int youwritetobmp1(RGBQUAD*pixarr, int xsize, int ysize, int num) ;
+int num = 0;
+
+
+int main(int argc,char **argv)
+{
+  struct sockaddr_in server_addr;
+  bzero(&server_addr,sizeof(server_addr));//全部置零
+  //设置地址相关的属性
+  server_addr.sin_family=AF_INET;
+  server_addr.sin_addr.s_addr=htons(INADDR_ANY);
+  server_addr.sin_port=htons(SERVER_PORT);
+
+
+
+
+  //创建套接字
+  int server_socket=socket(AF_INET,SOCK_STREAM,0);
+  if(server_socket<0) 
+   {
+     printf("socket create error\n");
+     exit(1);
+   }
+  //绑定端口
+  if(bind(server_socket,(struct sockaddr*)&server_addr,sizeof(server_addr)))
+    {
+      printf("bind error\n");
+      exit(1);
+    }
+  //服务器端监听
+   if(listen(server_socket,LISTEN_QUEUE))
+    {
+      printf("Server listen error\n");
+      exit(1);
+    }
+
+
+  //服务器端一直运行
+  while(1)
+   {
+     pid_t pid;
+     struct sockaddr_in client_addr;
+     socklen_t length=sizeof(client_addr);
+     //accept返回一个新的套接字与客户端进行通信
+     int new_server_socket=accept(server_socket,(struct sockaddr*)&client_addr,&length);
+//1*begin******************************************************************************
+     if(new_server_socket==-1)
+      {
+        printf("accept error\n");
+        continue;
+      }
+     else
+      {
+        printf("客户端%s连接成功\n",inet_ntoa(client_addr.sin_addr));
+        pid=fork();
+ //3*begin**运行子进程*************************************************************
+        if(pid==0)
+         {
+           int data_len,flag=0;
+           char buffer[BUFFER_SIZE];
+           // 定义文件流
+           FILE *stream;
+           bzero(buffer,BUFFER_SIZE);
+           strcpy(buffer,"Please enter the total path");
+           strcat(buffer,"\n");
+           send(new_server_socket,buffer,BUFFER_SIZE,0);
+           bzero(buffer,BUFFER_SIZE);
+//2*begin**服务器接受数据*********************************************           
+          // if((stream=fopen("data","w"))==NULL)
+          //  {
+          //    printf("file open error\n");
+          //    exit(1);
+          //  }
+          // else
+          //  {
+          //    bzero(buffer,BUFFER_SIZE);
+          //  }
+
+
+unsigned char recv_data[1344000];
+int offset = 0;
+bzero(recv_data, 1344000);
+
+          // printf("正在接收来自%s的文件....\n",inet_ntoa(client_addr.sin_addr));
+           //先将数据接受到缓冲区buffer中，再写入到新建的文件中
+           while((data_len=recv(new_server_socket,buffer,BUFFER_SIZE,0)) > 0)
+            {
+               flag++;
+  printf("flag is %d\n",flag);
+  printf("data_len is %d\n",data_len);
+               if(flag==1)
+                {
+                 printf("正在接收来自%s的文件....\n",inet_ntoa(client_addr.sin_addr));
+                
+                }
+            
+              if(data_len<0)
+               {
+                printf("接收错误\n");
+                exit(1);
+               }
+              //向文件中写入数据
+              //int write_len=fwrite(buffer,sizeof(char),data_len,stream);
+              //if(write_len>data_len)
+              // {
+              //   printf("file write failed\n");
+              //   exit(1);
+              // }
+      printf("offset is %d\n",offset);
+      memcpy(recv_data + offset, buffer, data_len);
+              offset +=  data_len;
+              bzero(buffer,BUFFER_SIZE);
+            }
+          if(flag>0)
+             printf("%s的文件传送完毕\n",inet_ntoa(client_addr.sin_addr));
+           if(flag==0)
+             printf("%s的文件传输失败\n",inet_ntoa(client_addr.sin_addr));
+//2*end**服务器接受数据**************************************************** 
+         // rename("data",inet_ntoa(client_addr.sin_addr)); 
+          //fclose(stream);
+          //rename("data",inet_ntoa(client_addr.sin_addr));
+          
+ printf("to bmp file\n");
+          youwritetobmp1((RGBQUAD *) recv_data, 1280, 350, num);
+ num++;
+          exit(1);         
+         }
+//3*end**运行子进程**********************************************************
+        else
+         {
+           close(new_server_socket);
+         }
+      }
+//1*end**************************************************************************************
+   close(new_server_socket);
+   }
+ return 0;
+}
+
+
+
+/**描述：生成bmp图片
+
+**参数：1、图片数据  2、宽   3、长  4、保存图片区分字符
+
+*返回：0 成功  -1  不成功
+
+**/
+static int youwritetobmp1(RGBQUAD*pixarr, int xsize, int ysize, int num) 
+{
+       unsigned char header[54] = 
+{
+        0x42, 0x4d, 0, 0, 0, 0, 0, 
+          0, 0, 0,54, 0, 0, 0, 40, 0, 
+          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+          1, 0, 24, 0,0, 0, 0, 0, 0, 0, 
+          0, 0, 0, 0,0, 0, 0, 0, 0, 0,  
+          0, 0, 0, 0,0, 0, 0, 0
+      };
+
+      RGBQUAD * pixarr1; 
+      int i;
+      int j;
+      long file_size = (long)xsize * (long)ysize * 3 + 54;
+      header[2] = (unsigned char)(file_size &0x000000ff);
+      header[3] = (file_size >> 8)   & 0x000000ff;
+      header[4] = (file_size >> 16) & 0x000000ff;
+      header[5] = (file_size >> 24) & 0x000000ff;
+    
+      long width;
+      if(!(xsize%4))     width=xsize;
+      else                    width= xsize+(4-xsize%4);     //è?2?ê?4μ?±?êy￡??ò×a??3é4μ?±?êy
+      header[18] = width & 0x000000ff;
+      header[19] = (width >> 8) &0x000000ff;
+      header[20] = (width >> 16) &0x000000ff;
+      header[21] = (width >> 24) &0x000000ff;
+    
+      long height = ysize;
+      header[22] = height &0x000000ff;
+      header[23] = (height >> 8) &0x000000ff;
+      header[24] = (height >> 16) &0x000000ff;
+      header[25] = (height >> 24) &0x000000ff;
+
+
+      char fname_bmp[128];
+      sprintf(fname_bmp, "capture_%d.bmp",num);
+    
+      FILE *fp;
+      if (!(fp = fopen(fname_bmp, "wb"))) 
+      return -1;
+      
+      fwrite(header, sizeof(unsigned char), 54, fp);
+
+
+      RGBQUAD zero={0,0,0};   //2?×?×??ú￡?ó?zeroì?3?
+      pixarr1 = pixarr + xsize * (ysize -1);
+
+      for(j=0;j<ysize;j++)
+{
+          if(!(xsize%4))
+{
+              for(i=0;i<xsize;i++)
+    { 
+                  fwrite(pixarr1+i, sizeof(RGBQUAD),1, fp);
+              }
+      pixarr1 -=xsize; 
+          }
+          else
+          {
+              for(i=0;i<xsize;i++)
+{ 
+                  fwrite(pixarr+i, sizeof(RGBQUAD),1, fp);
+              }
+
+              for(i=xsize;i<xsize+(4-xsize%4);i++)
+{
+                  fwrite(&zero, sizeof(RGBQUAD),1, fp);
+              }
+          }
+     }
+    
+     fclose(fp);
+     return 0;
+
+
+}
+
+来至:http://blog.csdn.net/cbffyx/article/details/12614037
+目前您尚未登录，请 登录 或 注册 后进行评论
+
+    基于TCP的文件传输
+
+        IT_dreamer1993
+        IT_dreamer1993
+        2016-01-27 02:34:32
+        2319
+
+    之前文件传输问题的性能的优化，着重解决大文件传输速率和可行度的问题。...
+
+    网络编程——TCP文件传输
+
+        Volcano3511
+        Volcano3511
+        2016-12-10 08:01:52
+        2217
+
+    网络编程——TCP文件传输 网络编程TCP文件传输 要求  思路  结果  代码  客户端  服务端  要求- 客户端向服务端发起socket连接，建立数据传输通道- 客户端向服务端发送要传输的文件名...
+
+    免费学习千门课程，能塑造出一个什么样的程序员？
+    技术大牛都在，你还不来么？
+
+    TCP文件传输（一）
+
+        loveRooney
+        loveRooney
+        2014-07-30 17:16:50
+        4460
+
+    最近在做网络抓包和文件传输，今天遇到一个qi
+
+    TcpLister和TcpClient进行文件传输
+
+        u014800094
+        u014800094
+        2017-03-16 11:12:53
+        938
+
+    TCP是一种面向连接的，可靠的，基于字节流的传输层通信协议。TCP建立一个连接需要三次握手，而终止一个连接要经过四次握手。一旦通信双方建立了TCP连接，连接中的任何一方都能向对方发送数据和接受对方发来...
+
+    TCP发送文件（转）
+
+        hachirou
+        hachirou
+        2011-02-13 11:17:00
+        1358
+
+    001//文件传送线程//服务器发送文件，客户端发送文件消息002UINTthreadSendFile(LPVOIDpvar)003{004    CDlgSendMessage *pDlg = (C...
+
+    TCP数据传输（四）：上传文件操作（将客户端的文件发送到服务器）
+    TCP数据传输：上传文件操作（将客户端的文件发送到服务器）
+
+        wangyanming123
+        wangyanming123
+        2016-05-08 21:10:25
+        715
+
+    网络编程 基于TCP的多文件传输程序（二）
+
+        sinat_32660629
+        sinat_32660629
+        2016-11-26 22:25:50
+        1141
+
+    新人，Java学习中，文章中遗漏错误之处，欢迎斧正 个人博客，完全原创 转载请注明出处。 项目全代码地址：GitHub 前一期文章：网络编程 基于Socket的多文件传输程序实...
+
+    Linux网络编程之使用TCP传输文件
+
+        gqb666
+        gqb666
+        2013-05-26 14:59:19
+        9157
+
+    原创作品，转载时请务必以超链接形式标明文章原始出处:http://blog.csdn.net/gqb666/article/details/8976263,作者:gqb666          ...
+
+    Linux--TCPsocket传输图片
+
+        qq_28877125
+        qq_28877125
+        2017-04-06 01:32:17
+        964
+
+    服务器端/* server端代码：接受Client端发送过来的一个图片 */#include #include #include #include #include #i...
+
+    windows基于TCP/IP的简单文件/图片传输
+
+        Jammg
+        Jammg
+        2015-11-21 17:04:41
+        1635
+
+    详细函数资料参考msdn // TransPic_Server.cpp : 定义控制台应用程序的入口点。 /* Server.cpp */ // #include "stdafx.h" #inc...
+
+    Windows下基于TCP协议的大文件传输（流形式）
+    1 1 1 1 1 #ifndef TCPRECVFILE #define TCPRECVFILE #include #include #include #include #defi...
+
+        sty23122555
+        sty23122555
+        2016-06-20 22:38:41
+        4783
+
+    TCP文件传输系统（Version 1.6 多线程，断点续传，支持大文件传输）
+
+        2010年03月27日 21:49
+        2.6MB
+        下载
+
+    VS2010编写CSocket大文件TCP传送
+
+        2014年07月13日 10:17
+        281KB
+        下载
+
+    Socket网络程序设计（3） ———— 利用tcp完成文件传输的设计和实现
+    用TCP/TP进行网际互连（3）———— 利用tcp完成文件传输的设计和实现 1.利用循环面向连接的模型完成固定文件的传输 2.由固定文件扩展成手动输入或选择文件 3.参考connectT...
+
+        KevinBetterQ
+        KevinBetterQ
+        2017-08-10 09:55:37
+        597
+
+    Linux C TCPSocket 传输文件简单实例-多线程实现
+    在Linux下使用C语言TCPSocket实现简单文件传输，包括客户端和服务器端，其中，服务器端使用多线程实现同时接收多个客户端发送的文件。发送文件内容之前，首先需要将文件名和长度信息发送到服务器，为...
+
+        wanna_wsl
+        wanna_wsl
+        2016-12-21 22:04:14
+        3262
+
+    TCP文件上传案例
+
+        u012315155
+        u012315155
+        2016-03-07 22:28:02
+        638
+
+    文件上传分析： 所谓的文件上传（客户端）就是首先的通过输入流将文件读取到内存中，然后在后再通过套接字输出流将文件写入到服务器端，然后就可以通过套接字输入流来读取服务器端返回的结果了。具体的事例代码如下...
+
+    网络编程--实现跨平台传输文件（TCP版）
+
+        2015年03月31日 17:26
+        127KB
+        下载
+
+    TCP文件传输
+
+        JoeBlackzqq
+        JoeBlackzqq
+        2011-11-08 13:44:31
+        640
+
+    下面是一个简单的TCP文件传输的例子，实现环境：Linux C Server.c // 向客户端发送文件 #include #include #include #include ...
+
+    tcp 文件传输
+
+        2012年02月14日 18:33
+        3.17MB
+        下载
+
+    木之子
+
+原创
+    48
+
+粉丝
+    37
+
+喜欢
+    7
+
+评论
+    10
+
+持之以恒
+等级： 5级,点击查看等级说明
+访问量： 19万+
+积分： 2861
+排名： 1万+
+博主最新文章
+更多文章
+
+    sqlite开发例子
+    sqlite语法网址
+    arm板上sqlite3移植及使用
+    结构体中指针赋值问题的分析及C代码示例
+    arm下移植json-c-0.9
+
+文章分类
+
+    c语言面试
+    43篇
+    linux命令
+    12篇
+    dm8168
+    17篇
+    dm8168-dsp
+    13篇
+    AUDIO
+    4篇
+    linux驱动编程
+    6篇
+    linux网络编程
+    17篇
+    linux搭环境
+    1篇
+    linux驱动知识
+    13篇
+    video
+    9篇
+    video面试
+    1篇
+    H264
+    5篇
+    MPEG4
+    3篇
+    网络（tcp
+    6篇
+    linux应用程序编程
+    40篇
+    Hi35xx
+    3篇
+    Ubuntu的搭环境
+    1篇
+    code
+    10篇
+    STM32 CAN 控制器
+    1篇
+    error
+    2篇
+    wifi
+    17篇
+    Makefile
+    12篇
+    git
+    1篇
+    bash脚本语法
+    1篇
+    wireshark常用的过滤命令
+    1篇
+    gcc
+    1篇
+    spi
+    6篇
+    矢量字形库
+    1篇
+    sd和usb自动检测
+    1篇
+    Source Insight
+    1篇
+    yuv
+    2篇
+    linux面试
+    1篇
+    DVB
+    1篇
+    SSL
+    1篇
+    gsm
+    2篇
+    shell
+    2篇
+    linux内核链表
+    4篇
+    V4L2
+    1篇
+    fifo循环队列
+    3篇
+    json-c
+    2篇
+    画流程图的工具
+    1篇
+    sqlite
+    7篇
+    Android驱动
+    13篇
+    Zwave
+    6篇
+    rs232和rs485
+    1篇
+    cloud39
+    1篇
+    onvif
+    1篇
+    ffmpeg
+    4篇
+    链表
+    1篇
+    CRC16校验C语言程序源码
+    2篇
+
+展开
+文章存档
+
+    2018年4月
+    5篇
+    2017年11月
+    1篇
+    2017年10月
+    1篇
+    2017年8月
+    6篇
+    2017年7月
+    3篇
+    2017年6月
+    2篇
+    2017年5月
+    1篇
+    2017年4月
+    1篇
+    2017年3月
+    4篇
+    2017年2月
+    1篇
+    2017年1月
+    1篇
+    2016年12月
+    3篇
+    2016年11月
+    2篇
+    2016年10月
+    3篇
+    2016年8月
+    5篇
+    2016年7月
+    4篇
+    2016年5月
+    4篇
+    2016年4月
+    20篇
+    2016年3月
+    6篇
+    2016年2月
+    10篇
+    2016年1月
+    7篇
+    2015年12月
+    5篇
+    2015年11月
+    6篇
+    2015年10月
+    8篇
+    2015年9月
+    4篇
+    2015年8月
+    3篇
+    2015年7月
+    2篇
+    2015年6月
+    13篇
+    2015年5月
+    6篇
+    2015年4月
+    19篇
+    2015年3月
+    11篇
+    2015年2月
+    5篇
+    2015年1月
+    28篇
+    2014年12月
+    17篇
+    2014年11月
+    5篇
+    2014年10月
+    5篇
+    2014年9月
+    15篇
+    2014年8月
+    22篇
+    2014年7月
+    20篇
+    2014年6月
+    18篇
+    2014年5月
+    39篇
+    2013年10月
+    1篇
+
+展开
+博主热门文章
+
+    当前已提供的各国NTP服务器列表
+    3616
+    linux下检测U盘插入并读取文件
+    3400
+    SIM800H NTP网络授时
+    2819
+    音频编解码介绍
+    2771
+    好东西！sqlite3中BLOB数据类型存储大对象运用示例
+    2698
+    yuv420sp旋转90度
+    2476
+    C语言经典面试题目
+    2382
+    SIM900 / SIM800 USSD代码命令 - 工作实例
+    2233
+    UDP局域网内广播消息
+    1958
+    SQLite中如何用api操作BLOB类型的字段
+    1850
+
+联系我们
+客服
+请扫描二维码联系客服
+
+webmaster@csdn.net
+
+400-660-0108
+
+QQ客服 客服论坛
+
+关于招聘广告服务 百度
+
+?1999-2018 CSDN版权所有
+
+京ICP证09002463号
+
+经营性网站备案信息
+
+网络110报警服务
+
+中国互联网举报中心
+
+北京互联网违法和不良信息举报中心
+
+加入CSDN，享受更精准的内容推荐，与500万程序员共同成长！
+登录
+注册
+
+
+    博客
+    学院
+    下载
+    GitChat
+    论坛
+    问答
+    商城
+    VIP
+    活动
+    招聘
+    ITeye
+    码云
+    CSTO
+
+    写博客
+    发Chat
+    登录注册
+
+TCP传输大文件（图片、文档）
+转载 2017年08月28日 18:35:18
+
+遇到TCP传输大文件问题，主要是
+
+（1）、传输快，但拼接成的大文件数据错
+
+（2）、加校验，传输变慢
+
+（3）、接收包数跟发送包数不对应
+
+费了一段时间才解决。
+
+今天，整理一下，留以后备用。
+
+首先，TCP是有连接、自带校验的传输协议，不需要再另外加代码(如接收端回复码给发送端)确保其正确性，这样可以保证TCP的速度，基本能达到4M/s以上。
+
+
+如接收包数和发送包数不一致，这只是说两边发送、接收的速度不对应，发送慢、接受快了，就会出现接收的次数多（不信你可以找找，你接收的数据个数中肯定有小于BUFFER_SIZE的）。所以在拼接成大文件时，就不能按照预设的size进行，应该按照实际接收到的数据size进行偏移。
+
+
+TCP传输时，发送端和接收端有缓冲区，send（）和recv（）函数其实只是实现copy功能，把缓冲区的内容拷出来。所以会出现缓冲区爆掉、接收接不全数据的情况。
+
+
+附上自己调试时写的小代码，仅供参考
+
+客户端实现的功能是，把一段1344000的数据（bmp图片的数据大小去掉54字节的header）发送给服务器端。文件流获取图片数据去图片头，模拟拍照等获取到的纯图片数据。实际传输的数据为1344000的数据。
+
+client.c
+
+#include <netinet/in.h>
+#include <sys/types.h>    
+#include <sys/socket.h>    
+#include <stdio.h>        
+#include <stdlib.h>       
+#include <string.h>      
+#include <time.h>                
+#include <arpa/inet.h>
+
+
+#define SERVER_PORT 6666
+#define BUFFER_SIZE 1024
+
+
+struct image_data{
+int value;
+unsigned char * imageData;
+int length;
+struct image_data * next;
+};
+
+
+
+
+int main(int argc,char **argv)
+{
+ if(argc!=2)
+  {
+      printf("参数错误，清输入两个参数\n");
+     exit(1);
+   }
+  FILE *stream;
+  struct sockaddr_in server_addr;
+   bzero(&server_addr,sizeof(server_addr)); 
+   server_addr.sin_family = AF_INET;    //internet协议族
+   server_addr.sin_addr.s_addr = inet_addr(argv[1]);
+   server_addr.sin_port = htons(SERVER_PORT);   
+   int sfd;
+   sfd=socket(AF_INET,SOCK_STREAM,0);
+   if(sfd<0)
+    {
+      printf("socket error\n");
+      exit(0);
+    }
+ 
+ 
+        int file_length;
+int tcpnum;
+int file_send_len;
+unsigned char snddata[1344000];
+unsigned char buffer[BUFFER_SIZE];
+file_length = sizeof(snddata);
+FILE *fp;
+    if (!(fp = fopen("1.bmp", "rb")))
+    {
+return -1;
+}
+fseek(fp, SEEK_SET, 54);
+    fread(snddata, sizeof(unsigned char), file_length, fp);
+fclose(fp);  
+struct image_data * temp_data = NULL;
+temp_data = (struct image_data *)malloc(sizeof(struct image_data));
+temp_data->imageData = (unsigned char *)malloc(sizeof(unsigned char) * file_length);
+temp_data ->imageData = snddata;
+temp_data ->length = file_length;
+ 
+ 
+   if(connect(sfd,(struct sockaddr*)&server_addr,sizeof(server_addr)) < 0)
+    {
+        printf("Can Not Connect To %s\n",argv[1]);
+        exit(1);
+    }
+
+
+    bzero(buffer,BUFFER_SIZE);
+    printf("正在传输...\n");
+    int len=0; 
+    //不断读取并发送数据
+
+
+tcpnum = file_length/BUFFER_SIZE;
+if((tcpnum * BUFFER_SIZE) < file_length)
+{
+tcpnum++;
+}
+printf("tcpnum = %d\n", tcpnum);
+int i;
+for(i = 0 ; i < tcpnum; i++)
+{
+
+if((file_length - i * BUFFER_SIZE) >= BUFFER_SIZE)
+{
+file_send_len = BUFFER_SIZE;
+}
+else
+{
+file_send_len = file_length - i * BUFFER_SIZE;
+} 
+bzero(buffer,BUFFER_SIZE);
+memcpy(buffer, temp_data->imageData + (i * BUFFER_SIZE), file_send_len);
+
+len  = send(sfd, buffer, file_send_len, 0);
+if(len < 0)
+{
+printf("send file error\n");
+break;
+}
+}
+close(sfd);
+printf("tcp over\n");
+
+
+    return 0;
+}
+
+
+
+
+server.c
+
+服务器端把数据存进一个数据，接收完之后，生成bmp图片。还可以直接存进文件（被注释了），但必须在客户端把图片header加上，一起发给服务器端。
+
+#include <netinet/in.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <string.h>
+#define SERVER_PORT 6666
+#define LISTEN_QUEUE 20
+#define BUFFER_SIZE 1024
+
+
+typedef struct tagRGBQUAD
+{
+    unsigned char rgbBlue;
+    unsigned char rgbGreen;
+    unsigned char rgbRed;
+} RGBQUAD; 
+static int youwritetobmp1(RGBQUAD*pixarr, int xsize, int ysize, int num) ;
+int num = 0;
+
+
+int main(int argc,char **argv)
+{
+  struct sockaddr_in server_addr;
+  bzero(&server_addr,sizeof(server_addr));//全部置零
+  //设置地址相关的属性
+  server_addr.sin_family=AF_INET;
+  server_addr.sin_addr.s_addr=htons(INADDR_ANY);
+  server_addr.sin_port=htons(SERVER_PORT);
+
+
+
+
+  //创建套接字
+  int server_socket=socket(AF_INET,SOCK_STREAM,0);
+  if(server_socket<0) 
+   {
+     printf("socket create error\n");
+     exit(1);
+   }
+  //绑定端口
+  if(bind(server_socket,(struct sockaddr*)&server_addr,sizeof(server_addr)))
+    {
+      printf("bind error\n");
+      exit(1);
+    }
+  //服务器端监听
+   if(listen(server_socket,LISTEN_QUEUE))
+    {
+      printf("Server listen error\n");
+      exit(1);
+    }
+
+
+  //服务器端一直运行
+  while(1)
+   {
+     pid_t pid;
+     struct sockaddr_in client_addr;
+     socklen_t length=sizeof(client_addr);
+     //accept返回一个新的套接字与客户端进行通信
+     int new_server_socket=accept(server_socket,(struct sockaddr*)&client_addr,&length);
+//1*begin******************************************************************************
+     if(new_server_socket==-1)
+      {
+        printf("accept error\n");
+        continue;
+      }
+     else
+      {
+        printf("客户端%s连接成功\n",inet_ntoa(client_addr.sin_addr));
+        pid=fork();
+ //3*begin**运行子进程*************************************************************
+        if(pid==0)
+         {
+           int data_len,flag=0;
+           char buffer[BUFFER_SIZE];
+           // 定义文件流
+           FILE *stream;
+           bzero(buffer,BUFFER_SIZE);
+           strcpy(buffer,"Please enter the total path");
+           strcat(buffer,"\n");
+           send(new_server_socket,buffer,BUFFER_SIZE,0);
+           bzero(buffer,BUFFER_SIZE);
+//2*begin**服务器接受数据*********************************************           
+          // if((stream=fopen("data","w"))==NULL)
+          //  {
+          //    printf("file open error\n");
+          //    exit(1);
+          //  }
+          // else
+          //  {
+          //    bzero(buffer,BUFFER_SIZE);
+          //  }
+
+
+unsigned char recv_data[1344000];
+int offset = 0;
+bzero(recv_data, 1344000);
+
+          // printf("正在接收来自%s的文件....\n",inet_ntoa(client_addr.sin_addr));
+           //先将数据接受到缓冲区buffer中，再写入到新建的文件中
+           while((data_len=recv(new_server_socket,buffer,BUFFER_SIZE,0)) > 0)
+            {
+               flag++;
+  printf("flag is %d\n",flag);
+  printf("data_len is %d\n",data_len);
+               if(flag==1)
+                {
+                 printf("正在接收来自%s的文件....\n",inet_ntoa(client_addr.sin_addr));
+                
+                }
+            
+              if(data_len<0)
+               {
+                printf("接收错误\n");
+                exit(1);
+               }
+              //向文件中写入数据
+              //int write_len=fwrite(buffer,sizeof(char),data_len,stream);
+              //if(write_len>data_len)
+              // {
+              //   printf("file write failed\n");
+              //   exit(1);
+              // }
+      printf("offset is %d\n",offset);
+      memcpy(recv_data + offset, buffer, data_len);
+              offset +=  data_len;
+              bzero(buffer,BUFFER_SIZE);
+            }
+          if(flag>0)
+             printf("%s的文件传送完毕\n",inet_ntoa(client_addr.sin_addr));
+           if(flag==0)
+             printf("%s的文件传输失败\n",inet_ntoa(client_addr.sin_addr));
+//2*end**服务器接受数据**************************************************** 
+         // rename("data",inet_ntoa(client_addr.sin_addr)); 
+          //fclose(stream);
+          //rename("data",inet_ntoa(client_addr.sin_addr));
+          
+ printf("to bmp file\n");
+          youwritetobmp1((RGBQUAD *) recv_data, 1280, 350, num);
+ num++;
+          exit(1);         
+         }
+//3*end**运行子进程**********************************************************
+        else
+         {
+           close(new_server_socket);
+         }
+      }
+//1*end**************************************************************************************
+   close(new_server_socket);
+   }
+ return 0;
+}
+
+
+
+/**描述：生成bmp图片
+
+**参数：1、图片数据  2、宽   3、长  4、保存图片区分字符
+
+*返回：0 成功  -1  不成功
+
+**/
+static int youwritetobmp1(RGBQUAD*pixarr, int xsize, int ysize, int num) 
+{
+       unsigned char header[54] = 
+{
+        0x42, 0x4d, 0, 0, 0, 0, 0, 
+          0, 0, 0,54, 0, 0, 0, 40, 0, 
+          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+          1, 0, 24, 0,0, 0, 0, 0, 0, 0, 
+          0, 0, 0, 0,0, 0, 0, 0, 0, 0,  
+          0, 0, 0, 0,0, 0, 0, 0
+      };
+
+      RGBQUAD * pixarr1; 
+      int i;
+      int j;
+      long file_size = (long)xsize * (long)ysize * 3 + 54;
+      header[2] = (unsigned char)(file_size &0x000000ff);
+      header[3] = (file_size >> 8)   & 0x000000ff;
+      header[4] = (file_size >> 16) & 0x000000ff;
+      header[5] = (file_size >> 24) & 0x000000ff;
+    
+      long width;
+      if(!(xsize%4))     width=xsize;
+      else                    width= xsize+(4-xsize%4);     //è?2?ê?4μ?±?êy￡??ò×a??3é4μ?±?êy
+      header[18] = width & 0x000000ff;
+      header[19] = (width >> 8) &0x000000ff;
+      header[20] = (width >> 16) &0x000000ff;
+      header[21] = (width >> 24) &0x000000ff;
+    
+      long height = ysize;
+      header[22] = height &0x000000ff;
+      header[23] = (height >> 8) &0x000000ff;
+      header[24] = (height >> 16) &0x000000ff;
+      header[25] = (height >> 24) &0x000000ff;
+
+
+      char fname_bmp[128];
+      sprintf(fname_bmp, "capture_%d.bmp",num);
+    
+      FILE *fp;
+      if (!(fp = fopen(fname_bmp, "wb"))) 
+      return -1;
+      
+      fwrite(header, sizeof(unsigned char), 54, fp);
+
+
+      RGBQUAD zero={0,0,0};   //2?×?×??ú￡?ó?zeroì?3?
+      pixarr1 = pixarr + xsize * (ysize -1);
+
+      for(j=0;j<ysize;j++)
+{
+          if(!(xsize%4))
+{
+              for(i=0;i<xsize;i++)
+    { 
+                  fwrite(pixarr1+i, sizeof(RGBQUAD),1, fp);
+              }
+      pixarr1 -=xsize; 
+          }
+          else
+          {
+              for(i=0;i<xsize;i++)
+{ 
+                  fwrite(pixarr+i, sizeof(RGBQUAD),1, fp);
+              }
+
+              for(i=xsize;i<xsize+(4-xsize%4);i++)
+{
+                  fwrite(&zero, sizeof(RGBQUAD),1, fp);
+              }
+          }
+     }
+    
+     fclose(fp);
+     return 0;
+
+
+}
+
+来至:http://blog.csdn.net/cbffyx/article/details/12614037
+目前您尚未登录，请 登录 或 注册 后进行评论
+
+    基于TCP的文件传输
+
+        IT_dreamer1993
+        IT_dreamer1993
+        2016-01-27 02:34:32
+        2319
+
+    之前文件传输问题的性能的优化，着重解决大文件传输速率和可行度的问题。...
+
+    网络编程——TCP文件传输
+
+        Volcano3511
+        Volcano3511
+        2016-12-10 08:01:52
+        2217
+
+    网络编程——TCP文件传输 网络编程TCP文件传输 要求  思路  结果  代码  客户端  服务端  要求- 客户端向服务端发起socket连接，建立数据传输通道- 客户端向服务端发送要传输的文件名...
+
+    免费学习千门课程，能塑造出一个什么样的程序员？
+    技术大牛都在，你还不来么？
+
+    TCP文件传输（一）
+
+        loveRooney
+        loveRooney
+        2014-07-30 17:16:50
+        4460
+
+    最近在做网络抓包和文件传输，今天遇到一个qi
+
+    TcpLister和TcpClient进行文件传输
+
+        u014800094
+        u014800094
+        2017-03-16 11:12:53
+        938
+
+    TCP是一种面向连接的，可靠的，基于字节流的传输层通信协议。TCP建立一个连接需要三次握手，而终止一个连接要经过四次握手。一旦通信双方建立了TCP连接，连接中的任何一方都能向对方发送数据和接受对方发来...
+
+    TCP发送文件（转）
+
+        hachirou
+        hachirou
+        2011-02-13 11:17:00
+        1358
+
+    001//文件传送线程//服务器发送文件，客户端发送文件消息002UINTthreadSendFile(LPVOIDpvar)003{004    CDlgSendMessage *pDlg = (C...
+
+    TCP数据传输（四）：上传文件操作（将客户端的文件发送到服务器）
+    TCP数据传输：上传文件操作（将客户端的文件发送到服务器）
+
+        wangyanming123
+        wangyanming123
+        2016-05-08 21:10:25
+        715
+
+    网络编程 基于TCP的多文件传输程序（二）
+
+        sinat_32660629
+        sinat_32660629
+        2016-11-26 22:25:50
+        1141
+
+    新人，Java学习中，文章中遗漏错误之处，欢迎斧正 个人博客，完全原创 转载请注明出处。 项目全代码地址：GitHub 前一期文章：网络编程 基于Socket的多文件传输程序实...
+
+    Linux网络编程之使用TCP传输文件
+
+        gqb666
+        gqb666
+        2013-05-26 14:59:19
+        9157
+
+    原创作品，转载时请务必以超链接形式标明文章原始出处:http://blog.csdn.net/gqb666/article/details/8976263,作者:gqb666          ...
+
+    Linux--TCPsocket传输图片
+
+        qq_28877125
+        qq_28877125
+        2017-04-06 01:32:17
+        964
+
+    服务器端/* server端代码：接受Client端发送过来的一个图片 */#include #include #include #include #include #i...
+
+    windows基于TCP/IP的简单文件/图片传输
+
+        Jammg
+        Jammg
+        2015-11-21 17:04:41
+        1635
+
+    详细函数资料参考msdn // TransPic_Server.cpp : 定义控制台应用程序的入口点。 /* Server.cpp */ // #include "stdafx.h" #inc...
+
+    Windows下基于TCP协议的大文件传输（流形式）
+    1 1 1 1 1 #ifndef TCPRECVFILE #define TCPRECVFILE #include #include #include #include #defi...
+
+        sty23122555
+        sty23122555
+        2016-06-20 22:38:41
+        4783
+
+    TCP文件传输系统（Version 1.6 多线程，断点续传，支持大文件传输）
+
+        2010年03月27日 21:49
+        2.6MB
+        下载
+
+    VS2010编写CSocket大文件TCP传送
+
+        2014年07月13日 10:17
+        281KB
+        下载
+
+    Socket网络程序设计（3） ———— 利用tcp完成文件传输的设计和实现
+    用TCP/TP进行网际互连（3）———— 利用tcp完成文件传输的设计和实现 1.利用循环面向连接的模型完成固定文件的传输 2.由固定文件扩展成手动输入或选择文件 3.参考connectT...
+
+        KevinBetterQ
+        KevinBetterQ
+        2017-08-10 09:55:37
+        597
+
+    Linux C TCPSocket 传输文件简单实例-多线程实现
+    在Linux下使用C语言TCPSocket实现简单文件传输，包括客户端和服务器端，其中，服务器端使用多线程实现同时接收多个客户端发送的文件。发送文件内容之前，首先需要将文件名和长度信息发送到服务器，为...
+
+        wanna_wsl
+        wanna_wsl
+        2016-12-21 22:04:14
+        3262
+
+    TCP文件上传案例
+
+        u012315155
+        u012315155
+        2016-03-07 22:28:02
+        638
+
+    文件上传分析： 所谓的文件上传（客户端）就是首先的通过输入流将文件读取到内存中，然后在后再通过套接字输出流将文件写入到服务器端，然后就可以通过套接字输入流来读取服务器端返回的结果了。具体的事例代码如下...
+
+    网络编程--实现跨平台传输文件（TCP版）
+
+        2015年03月31日 17:26
+        127KB
+        下载
+
+    TCP文件传输
+
+        JoeBlackzqq
+        JoeBlackzqq
+        2011-11-08 13:44:31
+        640
+
+    下面是一个简单的TCP文件传输的例子，实现环境：Linux C Server.c // 向客户端发送文件 #include #include #include #include ...
+
+    tcp 文件传输
+
+        2012年02月14日 18:33
+        3.17MB
+        下载
+
+    木之子
+
+原创
+    48
+
+粉丝
+    37
+
+喜欢
+    7
+
+评论
+    10
+
+持之以恒
+等级： 5级,点击查看等级说明
+访问量： 19万+
+积分： 2861
+排名： 1万+
+博主最新文章
+更多文章
+
+    sqlite开发例子
+    sqlite语法网址
+    arm板上sqlite3移植及使用
+    结构体中指针赋值问题的分析及C代码示例
+    arm下移植json-c-0.9
+
+文章分类
+
+    c语言面试
+    43篇
+    linux命令
+    12篇
+    dm8168
+    17篇
+    dm8168-dsp
+    13篇
+    AUDIO
+    4篇
+    linux驱动编程
+    6篇
+    linux网络编程
+    17篇
+    linux搭环境
+    1篇
+    linux驱动知识
+    13篇
+    video
+    9篇
+    video面试
+    1篇
+    H264
+    5篇
+    MPEG4
+    3篇
+    网络（tcp
+    6篇
+    linux应用程序编程
+    40篇
+    Hi35xx
+    3篇
+    Ubuntu的搭环境
+    1篇
+    code
+    10篇
+    STM32 CAN 控制器
+    1篇
+    error
+    2篇
+    wifi
+    17篇
+    Makefile
+    12篇
+    git
+    1篇
+    bash脚本语法
+    1篇
+    wireshark常用的过滤命令
+    1篇
+    gcc
+    1篇
+    spi
+    6篇
+    矢量字形库
+    1篇
+    sd和usb自动检测
+    1篇
+    Source Insight
+    1篇
+    yuv
+    2篇
+    linux面试
+    1篇
+    DVB
+    1篇
+    SSL
+    1篇
+    gsm
+    2篇
+    shell
+    2篇
+    linux内核链表
+    4篇
+    V4L2
+    1篇
+    fifo循环队列
+    3篇
+    json-c
+    2篇
+    画流程图的工具
+    1篇
+    sqlite
+    7篇
+    Android驱动
+    13篇
+    Zwave
+    6篇
+    rs232和rs485
+    1篇
+    cloud39
+    1篇
+    onvif
+    1篇
+    ffmpeg
+    4篇
+    链表
+    1篇
+    CRC16校验C语言程序源码
+    2篇
+
+展开
+文章存档
+
+    2018年4月
+    5篇
+    2017年11月
+    1篇
+    2017年10月
+    1篇
+    2017年8月
+    6篇
+    2017年7月
+    3篇
+    2017年6月
+    2篇
+    2017年5月
+    1篇
+    2017年4月
+    1篇
+    2017年3月
+    4篇
+    2017年2月
+    1篇
+    2017年1月
+    1篇
+    2016年12月
+    3篇
+    2016年11月
+    2篇
+    2016年10月
+    3篇
+    2016年8月
+    5篇
+    2016年7月
+    4篇
+    2016年5月
+    4篇
+    2016年4月
+    20篇
+    2016年3月
+    6篇
+    2016年2月
+    10篇
+    2016年1月
+    7篇
+    2015年12月
+    5篇
+    2015年11月
+    6篇
+    2015年10月
+    8篇
+    2015年9月
+    4篇
+    2015年8月
+    3篇
+    2015年7月
+    2篇
+    2015年6月
+    13篇
+    2015年5月
+    6篇
+    2015年4月
+    19篇
+    2015年3月
+    11篇
+    2015年2月
+    5篇
+    2015年1月
+    28篇
+    2014年12月
+    17篇
+    2014年11月
+    5篇
+    2014年10月
+    5篇
+    2014年9月
+    15篇
+    2014年8月
+    22篇
+    2014年7月
+    20篇
+    2014年6月
+    18篇
+    2014年5月
+    39篇
+    2013年10月
+    1篇
+
+展开
+博主热门文章
+
+    当前已提供的各国NTP服务器列表
+    3616
+    linux下检测U盘插入并读取文件
+    3400
+    SIM800H NTP网络授时
+    2819
+    音频编解码介绍
+    2771
+    好东西！sqlite3中BLOB数据类型存储大对象运用示例
+    2698
+    yuv420sp旋转90度
+    2476
+    C语言经典面试题目
+    2382
+    SIM900 / SIM800 USSD代码命令 - 工作实例
+    2233
+    UDP局域网内广播消息
+    1958
+    SQLite中如何用api操作BLOB类型的字段
+    1850
+
+联系我们
+客服
+请扫描二维码联系客服
+
+webmaster@csdn.net
+
+400-660-0108
+
+QQ客服 客服论坛
+
+关于招聘广告服务 百度
+
+?1999-2018 CSDN版权所有
+
+京ICP证09002463号
+
+经营性网站备案信息
+
+网络110报警服务
+
+中国互联网举报中心
+
+北京互联网违法和不良信息举报中心
+
+加入CSDN，享受更精准的内容推荐，与500万程序员共同成长！
+登录
+注册
+
+
+    博客
+    学院
+    下载
+    GitChat
+    论坛
+    问答
+    商城
+    VIP
+    活动
+    招聘
+    ITeye
+    码云
+    CSTO
+
+    写博客
+    发Chat
+    登录注册
+
+TCP传输大文件（图片、文档）
+转载 2017年08月28日 18:35:18
+
+遇到TCP传输大文件问题，主要是
+
+（1）、传输快，但拼接成的大文件数据错
+
+（2）、加校验，传输变慢
+
+（3）、接收包数跟发送包数不对应
+
+费了一段时间才解决。
+
+今天，整理一下，留以后备用。
+
+首先，TCP是有连接、自带校验的传输协议，不需要再另外加代码(如接收端回复码给发送端)确保其正确性，这样可以保证TCP的速度，基本能达到4M/s以上。
+
+
+如接收包数和发送包数不一致，这只是说两边发送、接收的速度不对应，发送慢、接受快了，就会出现接收的次数多（不信你可以找找，你接收的数据个数中肯定有小于BUFFER_SIZE的）。所以在拼接成大文件时，就不能按照预设的size进行，应该按照实际接收到的数据size进行偏移。
+
+
+TCP传输时，发送端和接收端有缓冲区，send（）和recv（）函数其实只是实现copy功能，把缓冲区的内容拷出来。所以会出现缓冲区爆掉、接收接不全数据的情况。
+
+
+附上自己调试时写的小代码，仅供参考
+
+客户端实现的功能是，把一段1344000的数据（bmp图片的数据大小去掉54字节的header）发送给服务器端。文件流获取图片数据去图片头，模拟拍照等获取到的纯图片数据。实际传输的数据为1344000的数据。
+
+client.c
+
+#include <netinet/in.h>
+#include <sys/types.h>    
+#include <sys/socket.h>    
+#include <stdio.h>        
+#include <stdlib.h>       
+#include <string.h>      
+#include <time.h>                
+#include <arpa/inet.h>
+
+
+#define SERVER_PORT 6666
+#define BUFFER_SIZE 1024
+
+
+struct image_data{
+int value;
+unsigned char * imageData;
+int length;
+struct image_data * next;
+};
+
+
+
+
+int main(int argc,char **argv)
+{
+ if(argc!=2)
+  {
+      printf("参数错误，清输入两个参数\n");
+     exit(1);
+   }
+  FILE *stream;
+  struct sockaddr_in server_addr;
+   bzero(&server_addr,sizeof(server_addr)); 
+   server_addr.sin_family = AF_INET;    //internet协议族
+   server_addr.sin_addr.s_addr = inet_addr(argv[1]);
+   server_addr.sin_port = htons(SERVER_PORT);   
+   int sfd;
+   sfd=socket(AF_INET,SOCK_STREAM,0);
+   if(sfd<0)
+    {
+      printf("socket error\n");
+      exit(0);
+    }
+ 
+ 
+        int file_length;
+int tcpnum;
+int file_send_len;
+unsigned char snddata[1344000];
+unsigned char buffer[BUFFER_SIZE];
+file_length = sizeof(snddata);
+FILE *fp;
+    if (!(fp = fopen("1.bmp", "rb")))
+    {
+return -1;
+}
+fseek(fp, SEEK_SET, 54);
+    fread(snddata, sizeof(unsigned char), file_length, fp);
+fclose(fp);  
+struct image_data * temp_data = NULL;
+temp_data = (struct image_data *)malloc(sizeof(struct image_data));
+temp_data->imageData = (unsigned char *)malloc(sizeof(unsigned char) * file_length);
+temp_data ->imageData = snddata;
+temp_data ->length = file_length;
+ 
+ 
+   if(connect(sfd,(struct sockaddr*)&server_addr,sizeof(server_addr)) < 0)
+    {
+        printf("Can Not Connect To %s\n",argv[1]);
+        exit(1);
+    }
+
+
+    bzero(buffer,BUFFER_SIZE);
+    printf("正在传输...\n");
+    int len=0; 
+    //不断读取并发送数据
+
+
+tcpnum = file_length/BUFFER_SIZE;
+if((tcpnum * BUFFER_SIZE) < file_length)
+{
+tcpnum++;
+}
+printf("tcpnum = %d\n", tcpnum);
+int i;
+for(i = 0 ; i < tcpnum; i++)
+{
+
+if((file_length - i * BUFFER_SIZE) >= BUFFER_SIZE)
+{
+file_send_len = BUFFER_SIZE;
+}
+else
+{
+file_send_len = file_length - i * BUFFER_SIZE;
+} 
+bzero(buffer,BUFFER_SIZE);
+memcpy(buffer, temp_data->imageData + (i * BUFFER_SIZE), file_send_len);
+
+len  = send(sfd, buffer, file_send_len, 0);
+if(len < 0)
+{
+printf("send file error\n");
+break;
+}
+}
+close(sfd);
+printf("tcp over\n");
+
+
+    return 0;
+}
+
+
+
+
+server.c
+
+服务器端把数据存进一个数据，接收完之后，生成bmp图片。还可以直接存进文件（被注释了），但必须在客户端把图片header加上，一起发给服务器端。
+
+#include <netinet/in.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <string.h>
+#define SERVER_PORT 6666
+#define LISTEN_QUEUE 20
+#define BUFFER_SIZE 1024
+
+
+typedef struct tagRGBQUAD
+{
+    unsigned char rgbBlue;
+    unsigned char rgbGreen;
+    unsigned char rgbRed;
+} RGBQUAD; 
+static int youwritetobmp1(RGBQUAD*pixarr, int xsize, int ysize, int num) ;
+int num = 0;
+
+
+int main(int argc,char **argv)
+{
+  struct sockaddr_in server_addr;
+  bzero(&server_addr,sizeof(server_addr));//全部置零
+  //设置地址相关的属性
+  server_addr.sin_family=AF_INET;
+  server_addr.sin_addr.s_addr=htons(INADDR_ANY);
+  server_addr.sin_port=htons(SERVER_PORT);
+
+
+
+
+  //创建套接字
+  int server_socket=socket(AF_INET,SOCK_STREAM,0);
+  if(server_socket<0) 
+   {
+     printf("socket create error\n");
+     exit(1);
+   }
+  //绑定端口
+  if(bind(server_socket,(struct sockaddr*)&server_addr,sizeof(server_addr)))
+    {
+      printf("bind error\n");
+      exit(1);
+    }
+  //服务器端监听
+   if(listen(server_socket,LISTEN_QUEUE))
+    {
+      printf("Server listen error\n");
+      exit(1);
+    }
+
+
+  //服务器端一直运行
+  while(1)
+   {
+     pid_t pid;
+     struct sockaddr_in client_addr;
+     socklen_t length=sizeof(client_addr);
+     //accept返回一个新的套接字与客户端进行通信
+     int new_server_socket=accept(server_socket,(struct sockaddr*)&client_addr,&length);
+//1*begin******************************************************************************
+     if(new_server_socket==-1)
+      {
+        printf("accept error\n");
+        continue;
+      }
+     else
+      {
+        printf("客户端%s连接成功\n",inet_ntoa(client_addr.sin_addr));
+        pid=fork();
+ //3*begin**运行子进程*************************************************************
+        if(pid==0)
+         {
+           int data_len,flag=0;
+           char buffer[BUFFER_SIZE];
+           // 定义文件流
+           FILE *stream;
+           bzero(buffer,BUFFER_SIZE);
+           strcpy(buffer,"Please enter the total path");
+           strcat(buffer,"\n");
+           send(new_server_socket,buffer,BUFFER_SIZE,0);
+           bzero(buffer,BUFFER_SIZE);
+//2*begin**服务器接受数据*********************************************           
+          // if((stream=fopen("data","w"))==NULL)
+          //  {
+          //    printf("file open error\n");
+          //    exit(1);
+          //  }
+          // else
+          //  {
+          //    bzero(buffer,BUFFER_SIZE);
+          //  }
+
+
+unsigned char recv_data[1344000];
+int offset = 0;
+bzero(recv_data, 1344000);
+
+          // printf("正在接收来自%s的文件....\n",inet_ntoa(client_addr.sin_addr));
+           //先将数据接受到缓冲区buffer中，再写入到新建的文件中
+           while((data_len=recv(new_server_socket,buffer,BUFFER_SIZE,0)) > 0)
+            {
+               flag++;
+  printf("flag is %d\n",flag);
+  printf("data_len is %d\n",data_len);
+               if(flag==1)
+                {
+                 printf("正在接收来自%s的文件....\n",inet_ntoa(client_addr.sin_addr));
+                
+                }
+            
+              if(data_len<0)
+               {
+                printf("接收错误\n");
+                exit(1);
+               }
+              //向文件中写入数据
+              //int write_len=fwrite(buffer,sizeof(char),data_len,stream);
+              //if(write_len>data_len)
+              // {
+              //   printf("file write failed\n");
+              //   exit(1);
+              // }
+      printf("offset is %d\n",offset);
+      memcpy(recv_data + offset, buffer, data_len);
+              offset +=  data_len;
+              bzero(buffer,BUFFER_SIZE);
+            }
+          if(flag>0)
+             printf("%s的文件传送完毕\n",inet_ntoa(client_addr.sin_addr));
+           if(flag==0)
+             printf("%s的文件传输失败\n",inet_ntoa(client_addr.sin_addr));
+//2*end**服务器接受数据**************************************************** 
+         // rename("data",inet_ntoa(client_addr.sin_addr)); 
+          //fclose(stream);
+          //rename("data",inet_ntoa(client_addr.sin_addr));
+          
+ printf("to bmp file\n");
+          youwritetobmp1((RGBQUAD *) recv_data, 1280, 350, num);
+ num++;
+          exit(1);         
+         }
+//3*end**运行子进程**********************************************************
+        else
+         {
+           close(new_server_socket);
+         }
+      }
+//1*end**************************************************************************************
+   close(new_server_socket);
+   }
+ return 0;
+}
+
+
+
+/**描述：生成bmp图片
+
+**参数：1、图片数据  2、宽   3、长  4、保存图片区分字符
+
+*返回：0 成功  -1  不成功
+
+**/
+static int youwritetobmp1(RGBQUAD*pixarr, int xsize, int ysize, int num) 
+{
+       unsigned char header[54] = 
+{
+        0x42, 0x4d, 0, 0, 0, 0, 0, 
+          0, 0, 0,54, 0, 0, 0, 40, 0, 
+          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+          1, 0, 24, 0,0, 0, 0, 0, 0, 0, 
+          0, 0, 0, 0,0, 0, 0, 0, 0, 0,  
+          0, 0, 0, 0,0, 0, 0, 0
+      };
+
+      RGBQUAD * pixarr1; 
+      int i;
+      int j;
+      long file_size = (long)xsize * (long)ysize * 3 + 54;
+      header[2] = (unsigned char)(file_size &0x000000ff);
+      header[3] = (file_size >> 8)   & 0x000000ff;
+      header[4] = (file_size >> 16) & 0x000000ff;
+      header[5] = (file_size >> 24) & 0x000000ff;
+    
+      long width;
+      if(!(xsize%4))     width=xsize;
+      else                    width= xsize+(4-xsize%4);     //è?2?ê?4μ?±?êy￡??ò×a??3é4μ?±?êy
+      header[18] = width & 0x000000ff;
+      header[19] = (width >> 8) &0x000000ff;
+      header[20] = (width >> 16) &0x000000ff;
+      header[21] = (width >> 24) &0x000000ff;
+    
+      long height = ysize;
+      header[22] = height &0x000000ff;
+      header[23] = (height >> 8) &0x000000ff;
+      header[24] = (height >> 16) &0x000000ff;
+      header[25] = (height >> 24) &0x000000ff;
+
+
+      char fname_bmp[128];
+      sprintf(fname_bmp, "capture_%d.bmp",num);
+    
+      FILE *fp;
+      if (!(fp = fopen(fname_bmp, "wb"))) 
+      return -1;
+      
+      fwrite(header, sizeof(unsigned char), 54, fp);
+
+
+      RGBQUAD zero={0,0,0};   //2?×?×??ú￡?ó?zeroì?3?
+      pixarr1 = pixarr + xsize * (ysize -1);
+
+      for(j=0;j<ysize;j++)
+{
+          if(!(xsize%4))
+{
+              for(i=0;i<xsize;i++)
+    { 
+                  fwrite(pixarr1+i, sizeof(RGBQUAD),1, fp);
+              }
+      pixarr1 -=xsize; 
+          }
+          else
+          {
+              for(i=0;i<xsize;i++)
+{ 
+                  fwrite(pixarr+i, sizeof(RGBQUAD),1, fp);
+              }
+
+              for(i=xsize;i<xsize+(4-xsize%4);i++)
+{
+                  fwrite(&zero, sizeof(RGBQUAD),1, fp);
+              }
+          }
+     }
+    
+     fclose(fp);
+     return 0;
+
+
+}
+
+来至:http://blog.csdn.net/cbffyx/article/details/12614037
+目前您尚未登录，请 登录 或 注册 后进行评论
+
+    基于TCP的文件传输
+
+        IT_dreamer1993
+        IT_dreamer1993
+        2016-01-27 02:34:32
+        2319
+
+    之前文件传输问题的性能的优化，着重解决大文件传输速率和可行度的问题。...
+
+    网络编程——TCP文件传输
+
+        Volcano3511
+        Volcano3511
+        2016-12-10 08:01:52
+        2217
+
+    网络编程——TCP文件传输 网络编程TCP文件传输 要求  思路  结果  代码  客户端  服务端  要求- 客户端向服务端发起socket连接，建立数据传输通道- 客户端向服务端发送要传输的文件名...
+
+    免费学习千门课程，能塑造出一个什么样的程序员？
+    技术大牛都在，你还不来么？
+
+    TCP文件传输（一）
+
+        loveRooney
+        loveRooney
+        2014-07-30 17:16:50
+        4460
+
+    最近在做网络抓包和文件传输，今天遇到一个qi
+
+    TcpLister和TcpClient进行文件传输
+
+        u014800094
+        u014800094
+        2017-03-16 11:12:53
+        938
+
+    TCP是一种面向连接的，可靠的，基于字节流的传输层通信协议。TCP建立一个连接需要三次握手，而终止一个连接要经过四次握手。一旦通信双方建立了TCP连接，连接中的任何一方都能向对方发送数据和接受对方发来...
+
+    TCP发送文件（转）
+
+        hachirou
+        hachirou
+        2011-02-13 11:17:00
+        1358
+
+    001//文件传送线程//服务器发送文件，客户端发送文件消息002UINTthreadSendFile(LPVOIDpvar)003{004    CDlgSendMessage *pDlg = (C...
+
+    TCP数据传输（四）：上传文件操作（将客户端的文件发送到服务器）
+    TCP数据传输：上传文件操作（将客户端的文件发送到服务器）
+
+        wangyanming123
+        wangyanming123
+        2016-05-08 21:10:25
+        715
+
+    网络编程 基于TCP的多文件传输程序（二）
+
+        sinat_32660629
+        sinat_32660629
+        2016-11-26 22:25:50
+        1141
+
+    新人，Java学习中，文章中遗漏错误之处，欢迎斧正 个人博客，完全原创 转载请注明出处。 项目全代码地址：GitHub 前一期文章：网络编程 基于Socket的多文件传输程序实...
+
+    Linux网络编程之使用TCP传输文件
+
+        gqb666
+        gqb666
+        2013-05-26 14:59:19
+        9157
+
+    原创作品，转载时请务必以超链接形式标明文章原始出处:http://blog.csdn.net/gqb666/article/details/8976263,作者:gqb666          ...
+
+    Linux--TCPsocket传输图片
+
+        qq_28877125
+        qq_28877125
+        2017-04-06 01:32:17
+        964
+
+    服务器端/* server端代码：接受Client端发送过来的一个图片 */#include #include #include #include #include #i...
+
+    windows基于TCP/IP的简单文件/图片传输
+
+        Jammg
+        Jammg
+        2015-11-21 17:04:41
+        1635
+
+    详细函数资料参考msdn // TransPic_Server.cpp : 定义控制台应用程序的入口点。 /* Server.cpp */ // #include "stdafx.h" #inc...
+
+    Windows下基于TCP协议的大文件传输（流形式）
+    1 1 1 1 1 #ifndef TCPRECVFILE #define TCPRECVFILE #include #include #include #include #defi...
+
+        sty23122555
+        sty23122555
+        2016-06-20 22:38:41
+        4783
+
+    TCP文件传输系统（Version 1.6 多线程，断点续传，支持大文件传输）
+
+        2010年03月27日 21:49
+        2.6MB
+        下载
+
+    VS2010编写CSocket大文件TCP传送
+
+        2014年07月13日 10:17
+        281KB
+        下载
+
+    Socket网络程序设计（3） ———— 利用tcp完成文件传输的设计和实现
+    用TCP/TP进行网际互连（3）———— 利用tcp完成文件传输的设计和实现 1.利用循环面向连接的模型完成固定文件的传输 2.由固定文件扩展成手动输入或选择文件 3.参考connectT...
+
+        KevinBetterQ
+        KevinBetterQ
+        2017-08-10 09:55:37
+        597
+
+    Linux C TCPSocket 传输文件简单实例-多线程实现
+    在Linux下使用C语言TCPSocket实现简单文件传输，包括客户端和服务器端，其中，服务器端使用多线程实现同时接收多个客户端发送的文件。发送文件内容之前，首先需要将文件名和长度信息发送到服务器，为...
+
+        wanna_wsl
+        wanna_wsl
+        2016-12-21 22:04:14
+        3262
+
+    TCP文件上传案例
+
+        u012315155
+        u012315155
+        2016-03-07 22:28:02
+        638
+
+    文件上传分析： 所谓的文件上传（客户端）就是首先的通过输入流将文件读取到内存中，然后在后再通过套接字输出流将文件写入到服务器端，然后就可以通过套接字输入流来读取服务器端返回的结果了。具体的事例代码如下...
+
+    网络编程--实现跨平台传输文件（TCP版）
+
+        2015年03月31日 17:26
+        127KB
+        下载
+
+    TCP文件传输
+
+        JoeBlackzqq
+        JoeBlackzqq
+        2011-11-08 13:44:31
+        640
+
+    下面是一个简单的TCP文件传输的例子，实现环境：Linux C Server.c // 向客户端发送文件 #include #include #include #include ...
+
+    tcp 文件传输
+
+        2012年02月14日 18:33
+        3.17MB
+        下载
+
+    木之子
+
+原创
+    48
+
+粉丝
+    37
+
+喜欢
+    7
+
+评论
+    10
+
+持之以恒
+等级： 5级,点击查看等级说明
+访问量： 19万+
+积分： 2861
+排名： 1万+
+博主最新文章
+更多文章
+
+    sqlite开发例子
+    sqlite语法网址
+    arm板上sqlite3移植及使用
+    结构体中指针赋值问题的分析及C代码示例
+    arm下移植json-c-0.9
+
+文章分类
+
+    c语言面试
+    43篇
+    linux命令
+    12篇
+    dm8168
+    17篇
+    dm8168-dsp
+    13篇
+    AUDIO
+    4篇
+    linux驱动编程
+    6篇
+    linux网络编程
+    17篇
+    linux搭环境
+    1篇
+    linux驱动知识
+    13篇
+    video
+    9篇
+    video面试
+    1篇
+    H264
+    5篇
+    MPEG4
+    3篇
+    网络（tcp
+    6篇
+    linux应用程序编程
+    40篇
+    Hi35xx
+    3篇
+    Ubuntu的搭环境
+    1篇
+    code
+    10篇
+    STM32 CAN 控制器
+    1篇
+    error
+    2篇
+    wifi
+    17篇
+    Makefile
+    12篇
+    git
+    1篇
+    bash脚本语法
+    1篇
+    wireshark常用的过滤命令
+    1篇
+    gcc
+    1篇
+    spi
+    6篇
+    矢量字形库
+    1篇
+    sd和usb自动检测
+    1篇
+    Source Insight
+    1篇
+    yuv
+    2篇
+    linux面试
+    1篇
+    DVB
+    1篇
+    SSL
+    1篇
+    gsm
+    2篇
+    shell
+    2篇
+    linux内核链表
+    4篇
+    V4L2
+    1篇
+    fifo循环队列
+    3篇
+    json-c
+    2篇
+    画流程图的工具
+    1篇
+    sqlite
+    7篇
+    Android驱动
+    13篇
+    Zwave
+    6篇
+    rs232和rs485
+    1篇
+    cloud39
+    1篇
+    onvif
+    1篇
+    ffmpeg
+    4篇
+    链表
+    1篇
+    CRC16校验C语言程序源码
+    2篇
+
+展开
+文章存档
+
+    2018年4月
+    5篇
+    2017年11月
+    1篇
+    2017年10月
+    1篇
+    2017年8月
+    6篇
+    2017年7月
+    3篇
+    2017年6月
+    2篇
+    2017年5月
+    1篇
+    2017年4月
+    1篇
+    2017年3月
+    4篇
+    2017年2月
+    1篇
+    2017年1月
+    1篇
+    2016年12月
+    3篇
+    2016年11月
+    2篇
+    2016年10月
+    3篇
+    2016年8月
+    5篇
+    2016年7月
+    4篇
+    2016年5月
+    4篇
+    2016年4月
+    20篇
+    2016年3月
+    6篇
+    2016年2月
+    10篇
+    2016年1月
+    7篇
+    2015年12月
+    5篇
+    2015年11月
+    6篇
+    2015年10月
+    8篇
+    2015年9月
+    4篇
+    2015年8月
+    3篇
+    2015年7月
+    2篇
+    2015年6月
+    13篇
+    2015年5月
+    6篇
+    2015年4月
+    19篇
+    2015年3月
+    11篇
+    2015年2月
+    5篇
+    2015年1月
+    28篇
+    2014年12月
+    17篇
+    2014年11月
+    5篇
+    2014年10月
+    5篇
+    2014年9月
+    15篇
+    2014年8月
+    22篇
+    2014年7月
+    20篇
+    2014年6月
+    18篇
+    2014年5月
+    39篇
+    2013年10月
+    1篇
+
+展开
+博主热门文章
+
+    当前已提供的各国NTP服务器列表
+    3616
+    linux下检测U盘插入并读取文件
+    3400
+    SIM800H NTP网络授时
+    2819
+    音频编解码介绍
+    2771
+    好东西！sqlite3中BLOB数据类型存储大对象运用示例
+    2698
+    yuv420sp旋转90度
+    2476
+    C语言经典面试题目
+    2382
+    SIM900 / SIM800 USSD代码命令 - 工作实例
+    2233
+    UDP局域网内广播消息
+    1958
+    SQLite中如何用api操作BLOB类型的字段
+    1850
+
+联系我们
+客服
+请扫描二维码联系客服
+
+webmaster@csdn.net
+
+400-660-0108
+
+QQ客服 客服论坛
+
+关于招聘广告服务 百度
+
+?1999-2018 CSDN版权所有
+
+京ICP证09002463号
+
+经营性网站备案信息
+
+网络110报警服务
+
+中国互联网举报中心
+
+北京互联网违法和不良信息举报中心
+
+加入CSDN，享受更精准的内容推荐，与500万程序员共同成长！
+登录
+注册
+
+
+    博客
+    学院
+    下载
+    GitChat
+    论坛
+    问答
+    商城
+    VIP
+    活动
+    招聘
+    ITeye
+    码云
+    CSTO
+
+    写博客
+    发Chat
+    登录注册
+
+TCP传输大文件（图片、文档）
+转载 2017年08月28日 18:35:18
+
+遇到TCP传输大文件问题，主要是
+
+（1）、传输快，但拼接成的大文件数据错
+
+（2）、加校验，传输变慢
+
+（3）、接收包数跟发送包数不对应
+
+费了一段时间才解决。
+
+今天，整理一下，留以后备用。
+
+首先，TCP是有连接、自带校验的传输协议，不需要再另外加代码(如接收端回复码给发送端)确保其正确性，这样可以保证TCP的速度，基本能达到4M/s以上。
+
+
+如接收包数和发送包数不一致，这只是说两边发送、接收的速度不对应，发送慢、接受快了，就会出现接收的次数多（不信你可以找找，你接收的数据个数中肯定有小于BUFFER_SIZE的）。所以在拼接成大文件时，就不能按照预设的size进行，应该按照实际接收到的数据size进行偏移。
+
+
+TCP传输时，发送端和接收端有缓冲区，send（）和recv（）函数其实只是实现copy功能，把缓冲区的内容拷出来。所以会出现缓冲区爆掉、接收接不全数据的情况。
+
+
+附上自己调试时写的小代码，仅供参考
+
+客户端实现的功能是，把一段1344000的数据（bmp图片的数据大小去掉54字节的header）发送给服务器端。文件流获取图片数据去图片头，模拟拍照等获取到的纯图片数据。实际传输的数据为1344000的数据。
+
+client.c
+
+#include <netinet/in.h>
+#include <sys/types.h>    
+#include <sys/socket.h>    
+#include <stdio.h>        
+#include <stdlib.h>       
+#include <string.h>      
+#include <time.h>                
+#include <arpa/inet.h>
+
+
+#define SERVER_PORT 6666
+#define BUFFER_SIZE 1024
+
+
+struct image_data{
+int value;
+unsigned char * imageData;
+int length;
+struct image_data * next;
+};
+
+
+
+
+int main(int argc,char **argv)
+{
+ if(argc!=2)
+  {
+      printf("参数错误，清输入两个参数\n");
+     exit(1);
+   }
+  FILE *stream;
+  struct sockaddr_in server_addr;
+   bzero(&server_addr,sizeof(server_addr)); 
+   server_addr.sin_family = AF_INET;    //internet协议族
+   server_addr.sin_addr.s_addr = inet_addr(argv[1]);
+   server_addr.sin_port = htons(SERVER_PORT);   
+   int sfd;
+   sfd=socket(AF_INET,SOCK_STREAM,0);
+   if(sfd<0)
+    {
+      printf("socket error\n");
+      exit(0);
+    }
+ 
+ 
+        int file_length;
+int tcpnum;
+int file_send_len;
+unsigned char snddata[1344000];
+unsigned char buffer[BUFFER_SIZE];
+file_length = sizeof(snddata);
+FILE *fp;
+    if (!(fp = fopen("1.bmp", "rb")))
+    {
+return -1;
+}
+fseek(fp, SEEK_SET, 54);
+    fread(snddata, sizeof(unsigned char), file_length, fp);
+fclose(fp);  
+struct image_data * temp_data = NULL;
+temp_data = (struct image_data *)malloc(sizeof(struct image_data));
+temp_data->imageData = (unsigned char *)malloc(sizeof(unsigned char) * file_length);
+temp_data ->imageData = snddata;
+temp_data ->length = file_length;
+ 
+ 
+   if(connect(sfd,(struct sockaddr*)&server_addr,sizeof(server_addr)) < 0)
+    {
+        printf("Can Not Connect To %s\n",argv[1]);
+        exit(1);
+    }
+
+
+    bzero(buffer,BUFFER_SIZE);
+    printf("正在传输...\n");
+    int len=0; 
+    //不断读取并发送数据
+
+
+tcpnum = file_length/BUFFER_SIZE;
+if((tcpnum * BUFFER_SIZE) < file_length)
+{
+tcpnum++;
+}
+printf("tcpnum = %d\n", tcpnum);
+int i;
+for(i = 0 ; i < tcpnum; i++)
+{
+
+if((file_length - i * BUFFER_SIZE) >= BUFFER_SIZE)
+{
+file_send_len = BUFFER_SIZE;
+}
+else
+{
+file_send_len = file_length - i * BUFFER_SIZE;
+} 
+bzero(buffer,BUFFER_SIZE);
+memcpy(buffer, temp_data->imageData + (i * BUFFER_SIZE), file_send_len);
+
+len  = send(sfd, buffer, file_send_len, 0);
+if(len < 0)
+{
+printf("send file error\n");
+break;
+}
+}
+close(sfd);
+printf("tcp over\n");
+
+
+    return 0;
+}
+
+
+
+
+server.c
+
+服务器端把数据存进一个数据，接收完之后，生成bmp图片。还可以直接存进文件（被注释了），但必须在客户端把图片header加上，一起发给服务器端。
+
+#include <netinet/in.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <string.h>
+#define SERVER_PORT 6666
+#define LISTEN_QUEUE 20
+#define BUFFER_SIZE 1024
+
+
+typedef struct tagRGBQUAD
+{
+    unsigned char rgbBlue;
+    unsigned char rgbGreen;
+    unsigned char rgbRed;
+} RGBQUAD; 
+static int youwritetobmp1(RGBQUAD*pixarr, int xsize, int ysize, int num) ;
+int num = 0;
+
+
+int main(int argc,char **argv)
+{
+  struct sockaddr_in server_addr;
+  bzero(&server_addr,sizeof(server_addr));//全部置零
+  //设置地址相关的属性
+  server_addr.sin_family=AF_INET;
+  server_addr.sin_addr.s_addr=htons(INADDR_ANY);
+  server_addr.sin_port=htons(SERVER_PORT);
+
+
+
+
+  //创建套接字
+  int server_socket=socket(AF_INET,SOCK_STREAM,0);
+  if(server_socket<0) 
+   {
+     printf("socket create error\n");
+     exit(1);
+   }
+  //绑定端口
+  if(bind(server_socket,(struct sockaddr*)&server_addr,sizeof(server_addr)))
+    {
+      printf("bind error\n");
+      exit(1);
+    }
+  //服务器端监听
+   if(listen(server_socket,LISTEN_QUEUE))
+    {
+      printf("Server listen error\n");
+      exit(1);
+    }
+
+
+  //服务器端一直运行
+  while(1)
+   {
+     pid_t pid;
+     struct sockaddr_in client_addr;
+     socklen_t length=sizeof(client_addr);
+     //accept返回一个新的套接字与客户端进行通信
+     int new_server_socket=accept(server_socket,(struct sockaddr*)&client_addr,&length);
+//1*begin******************************************************************************
+     if(new_server_socket==-1)
+      {
+        printf("accept error\n");
+        continue;
+      }
+     else
+      {
+        printf("客户端%s连接成功\n",inet_ntoa(client_addr.sin_addr));
+        pid=fork();
+ //3*begin**运行子进程*************************************************************
+        if(pid==0)
+         {
+           int data_len,flag=0;
+           char buffer[BUFFER_SIZE];
+           // 定义文件流
+           FILE *stream;
+           bzero(buffer,BUFFER_SIZE);
+           strcpy(buffer,"Please enter the total path");
+           strcat(buffer,"\n");
+           send(new_server_socket,buffer,BUFFER_SIZE,0);
+           bzero(buffer,BUFFER_SIZE);
+//2*begin**服务器接受数据*********************************************           
+          // if((stream=fopen("data","w"))==NULL)
+          //  {
+          //    printf("file open error\n");
+          //    exit(1);
+          //  }
+          // else
+          //  {
+          //    bzero(buffer,BUFFER_SIZE);
+          //  }
+
+
+unsigned char recv_data[1344000];
+int offset = 0;
+bzero(recv_data, 1344000);
+
+          // printf("正在接收来自%s的文件....\n",inet_ntoa(client_addr.sin_addr));
+           //先将数据接受到缓冲区buffer中，再写入到新建的文件中
+           while((data_len=recv(new_server_socket,buffer,BUFFER_SIZE,0)) > 0)
+            {
+               flag++;
+  printf("flag is %d\n",flag);
+  printf("data_len is %d\n",data_len);
+               if(flag==1)
+                {
+                 printf("正在接收来自%s的文件....\n",inet_ntoa(client_addr.sin_addr));
+                
+                }
+            
+              if(data_len<0)
+               {
+                printf("接收错误\n");
+                exit(1);
+               }
+              //向文件中写入数据
+              //int write_len=fwrite(buffer,sizeof(char),data_len,stream);
+              //if(write_len>data_len)
+              // {
+              //   printf("file write failed\n");
+              //   exit(1);
+              // }
+      printf("offset is %d\n",offset);
+      memcpy(recv_data + offset, buffer, data_len);
+              offset +=  data_len;
+              bzero(buffer,BUFFER_SIZE);
+            }
+          if(flag>0)
+             printf("%s的文件传送完毕\n",inet_ntoa(client_addr.sin_addr));
+           if(flag==0)
+             printf("%s的文件传输失败\n",inet_ntoa(client_addr.sin_addr));
+//2*end**服务器接受数据**************************************************** 
+         // rename("data",inet_ntoa(client_addr.sin_addr)); 
+          //fclose(stream);
+          //rename("data",inet_ntoa(client_addr.sin_addr));
+          
+ printf("to bmp file\n");
+          youwritetobmp1((RGBQUAD *) recv_data, 1280, 350, num);
+ num++;
+          exit(1);         
+         }
+//3*end**运行子进程**********************************************************
+        else
+         {
+           close(new_server_socket);
+         }
+      }
+//1*end**************************************************************************************
+   close(new_server_socket);
+   }
+ return 0;
+}
+
+
+
+/**描述：生成bmp图片
+
+**参数：1、图片数据  2、宽   3、长  4、保存图片区分字符
+
+*返回：0 成功  -1  不成功
+
+**/
+static int youwritetobmp1(RGBQUAD*pixarr, int xsize, int ysize, int num) 
+{
+       unsigned char header[54] = 
+{
+        0x42, 0x4d, 0, 0, 0, 0, 0, 
+          0, 0, 0,54, 0, 0, 0, 40, 0, 
+          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+          1, 0, 24, 0,0, 0, 0, 0, 0, 0, 
+          0, 0, 0, 0,0, 0, 0, 0, 0, 0,  
+          0, 0, 0, 0,0, 0, 0, 0
+      };
+
+      RGBQUAD * pixarr1; 
+      int i;
+      int j;
+      long file_size = (long)xsize * (long)ysize * 3 + 54;
+      header[2] = (unsigned char)(file_size &0x000000ff);
+      header[3] = (file_size >> 8)   & 0x000000ff;
+      header[4] = (file_size >> 16) & 0x000000ff;
+      header[5] = (file_size >> 24) & 0x000000ff;
+    
+      long width;
+      if(!(xsize%4))     width=xsize;
+      else                    width= xsize+(4-xsize%4);     //è?2?ê?4μ?±?êy￡??ò×a??3é4μ?±?êy
+      header[18] = width & 0x000000ff;
+      header[19] = (width >> 8) &0x000000ff;
+      header[20] = (width >> 16) &0x000000ff;
+      header[21] = (width >> 24) &0x000000ff;
+    
+      long height = ysize;
+      header[22] = height &0x000000ff;
+      header[23] = (height >> 8) &0x000000ff;
+      header[24] = (height >> 16) &0x000000ff;
+      header[25] = (height >> 24) &0x000000ff;
+
+
+      char fname_bmp[128];
+      sprintf(fname_bmp, "capture_%d.bmp",num);
+    
+      FILE *fp;
+      if (!(fp = fopen(fname_bmp, "wb"))) 
+      return -1;
+      
+      fwrite(header, sizeof(unsigned char), 54, fp);
+
+
+      RGBQUAD zero={0,0,0};   //2?×?×??ú￡?ó?zeroì?3?
+      pixarr1 = pixarr + xsize * (ysize -1);
+
+      for(j=0;j<ysize;j++)
+{
+          if(!(xsize%4))
+{
+              for(i=0;i<xsize;i++)
+    { 
+                  fwrite(pixarr1+i, sizeof(RGBQUAD),1, fp);
+              }
+      pixarr1 -=xsize; 
+          }
+          else
+          {
+              for(i=0;i<xsize;i++)
+{ 
+                  fwrite(pixarr+i, sizeof(RGBQUAD),1, fp);
+              }
+
+              for(i=xsize;i<xsize+(4-xsize%4);i++)
+{
+                  fwrite(&zero, sizeof(RGBQUAD),1, fp);
+              }
+          }
+     }
+    
+     fclose(fp);
+     return 0;
+
+
+}
+
+来至:http://blog.csdn.net/cbffyx/article/details/12614037
+目前您尚未登录，请 登录 或 注册 后进行评论
+
+    基于TCP的文件传输
+
+        IT_dreamer1993
+        IT_dreamer1993
+        2016-01-27 02:34:32
+        2319
+
+    之前文件传输问题的性能的优化，着重解决大文件传输速率和可行度的问题。...
+
+    网络编程——TCP文件传输
+
+        Volcano3511
+        Volcano3511
+        2016-12-10 08:01:52
+        2217
+
+    网络编程——TCP文件传输 网络编程TCP文件传输 要求  思路  结果  代码  客户端  服务端  要求- 客户端向服务端发起socket连接，建立数据传输通道- 客户端向服务端发送要传输的文件名...
+
+    免费学习千门课程，能塑造出一个什么样的程序员？
+    技术大牛都在，你还不来么？
+
+    TCP文件传输（一）
+
+        loveRooney
+        loveRooney
+        2014-07-30 17:16:50
+        4460
+
+    最近在做网络抓包和文件传输，今天遇到一个qi
+
+    TcpLister和TcpClient进行文件传输
+
+        u014800094
+        u014800094
+        2017-03-16 11:12:53
+        938
+
+    TCP是一种面向连接的，可靠的，基于字节流的传输层通信协议。TCP建立一个连接需要三次握手，而终止一个连接要经过四次握手。一旦通信双方建立了TCP连接，连接中的任何一方都能向对方发送数据和接受对方发来...
+
+    TCP发送文件（转）
+
+        hachirou
+        hachirou
+        2011-02-13 11:17:00
+        1358
+
+    001//文件传送线程//服务器发送文件，客户端发送文件消息002UINTthreadSendFile(LPVOIDpvar)003{004    CDlgSendMessage *pDlg = (C...
+
+    TCP数据传输（四）：上传文件操作（将客户端的文件发送到服务器）
+    TCP数据传输：上传文件操作（将客户端的文件发送到服务器）
+
+        wangyanming123
+        wangyanming123
+        2016-05-08 21:10:25
+        715
+
+    网络编程 基于TCP的多文件传输程序（二）
+
+        sinat_32660629
+        sinat_32660629
+        2016-11-26 22:25:50
+        1141
+
+    新人，Java学习中，文章中遗漏错误之处，欢迎斧正 个人博客，完全原创 转载请注明出处。 项目全代码地址：GitHub 前一期文章：网络编程 基于Socket的多文件传输程序实...
+
+    Linux网络编程之使用TCP传输文件
+
+        gqb666
+        gqb666
+        2013-05-26 14:59:19
+        9157
+
+    原创作品，转载时请务必以超链接形式标明文章原始出处:http://blog.csdn.net/gqb666/article/details/8976263,作者:gqb666          ...
+
+    Linux--TCPsocket传输图片
+
+        qq_28877125
+        qq_28877125
+        2017-04-06 01:32:17
+        964
+
+    服务器端/* server端代码：接受Client端发送过来的一个图片 */#include #include #include #include #include #i...
+
+    windows基于TCP/IP的简单文件/图片传输
+
+        Jammg
+        Jammg
+        2015-11-21 17:04:41
+        1635
+
+    详细函数资料参考msdn // TransPic_Server.cpp : 定义控制台应用程序的入口点。 /* Server.cpp */ // #include "stdafx.h" #inc...
+
+    Windows下基于TCP协议的大文件传输（流形式）
+    1 1 1 1 1 #ifndef TCPRECVFILE #define TCPRECVFILE #include #include #include #include #defi...
+
+        sty23122555
+        sty23122555
+        2016-06-20 22:38:41
+        4783
+
+    TCP文件传输系统（Version 1.6 多线程，断点续传，支持大文件传输）
+
+        2010年03月27日 21:49
+        2.6MB
+        下载
+
+    VS2010编写CSocket大文件TCP传送
+
+        2014年07月13日 10:17
+        281KB
+        下载
+
+    Socket网络程序设计（3） ———— 利用tcp完成文件传输的设计和实现
+    用TCP/TP进行网际互连（3）———— 利用tcp完成文件传输的设计和实现 1.利用循环面向连接的模型完成固定文件的传输 2.由固定文件扩展成手动输入或选择文件 3.参考connectT...
+
+        KevinBetterQ
+        KevinBetterQ
+        2017-08-10 09:55:37
+        597
+
+    Linux C TCPSocket 传输文件简单实例-多线程实现
+    在Linux下使用C语言TCPSocket实现简单文件传输，包括客户端和服务器端，其中，服务器端使用多线程实现同时接收多个客户端发送的文件。发送文件内容之前，首先需要将文件名和长度信息发送到服务器，为...
+
+        wanna_wsl
+        wanna_wsl
+        2016-12-21 22:04:14
+        3262
+
+    TCP文件上传案例
+
+        u012315155
+        u012315155
+        2016-03-07 22:28:02
+        638
+
+    文件上传分析： 所谓的文件上传（客户端）就是首先的通过输入流将文件读取到内存中，然后在后再通过套接字输出流将文件写入到服务器端，然后就可以通过套接字输入流来读取服务器端返回的结果了。具体的事例代码如下...
+
+    网络编程--实现跨平台传输文件（TCP版）
+
+        2015年03月31日 17:26
+        127KB
+        下载
+
+    TCP文件传输
+
+        JoeBlackzqq
+        JoeBlackzqq
+        2011-11-08 13:44:31
+        640
+
+    下面是一个简单的TCP文件传输的例子，实现环境：Linux C Server.c // 向客户端发送文件 #include #include #include #include ...
+
+    tcp 文件传输
+
+        2012年02月14日 18:33
+        3.17MB
+        下载
+
+    木之子
+
+原创
+    48
+
+粉丝
+    37
+
+喜欢
+    7
+
+评论
+    10
+
+持之以恒
+等级： 5级,点击查看等级说明
+访问量： 19万+
+积分： 2861
+排名： 1万+
+博主最新文章
+更多文章
+
+    sqlite开发例子
+    sqlite语法网址
+    arm板上sqlite3移植及使用
+    结构体中指针赋值问题的分析及C代码示例
+    arm下移植json-c-0.9
+
+文章分类
+
+    c语言面试
+    43篇
+    linux命令
+    12篇
+    dm8168
+    17篇
+    dm8168-dsp
+    13篇
+    AUDIO
+    4篇
+    linux驱动编程
+    6篇
+    linux网络编程
+    17篇
+    linux搭环境
+    1篇
+    linux驱动知识
+    13篇
+    video
+    9篇
+    video面试
+    1篇
+    H264
+    5篇
+    MPEG4
+    3篇
+    网络（tcp
+    6篇
+    linux应用程序编程
+    40篇
+    Hi35xx
+    3篇
+    Ubuntu的搭环境
+    1篇
+    code
+    10篇
+    STM32 CAN 控制器
+    1篇
+    error
+    2篇
+    wifi
+    17篇
+    Makefile
+    12篇
+    git
+    1篇
+    bash脚本语法
+    1篇
+    wireshark常用的过滤命令
+    1篇
+    gcc
+    1篇
+    spi
+    6篇
+    矢量字形库
+    1篇
+    sd和usb自动检测
+    1篇
+    Source Insight
+    1篇
+    yuv
+    2篇
+    linux面试
+    1篇
+    DVB
+    1篇
+    SSL
+    1篇
+    gsm
+    2篇
+    shell
+    2篇
+    linux内核链表
+    4篇
+    V4L2
+    1篇
+    fifo循环队列
+    3篇
+    json-c
+    2篇
+    画流程图的工具
+    1篇
+    sqlite
+    7篇
+    Android驱动
+    13篇
+    Zwave
+    6篇
+    rs232和rs485
+    1篇
+    cloud39
+    1篇
+    onvif
+    1篇
+    ffmpeg
+    4篇
+    链表
+    1篇
+    CRC16校验C语言程序源码
+    2篇
+
+展开
+文章存档
+
+    2018年4月
+    5篇
+    2017年11月
+    1篇
+    2017年10月
+    1篇
+    2017年8月
+    6篇
+    2017年7月
+    3篇
+    2017年6月
+    2篇
+    2017年5月
+    1篇
+    2017年4月
+    1篇
+    2017年3月
+    4篇
+    2017年2月
+    1篇
+    2017年1月
+    1篇
+    2016年12月
+    3篇
+    2016年11月
+    2篇
+    2016年10月
+    3篇
+    2016年8月
+    5篇
+    2016年7月
+    4篇
+    2016年5月
+    4篇
+    2016年4月
+    20篇
+    2016年3月
+    6篇
+    2016年2月
+    10篇
+    2016年1月
+    7篇
+    2015年12月
+    5篇
+    2015年11月
+    6篇
+    2015年10月
+    8篇
+    2015年9月
+    4篇
+    2015年8月
+    3篇
+    2015年7月
+    2篇
+    2015年6月
+    13篇
+    2015年5月
+    6篇
+    2015年4月
+    19篇
+    2015年3月
+    11篇
+    2015年2月
+    5篇
+    2015年1月
+    28篇
+    2014年12月
+    17篇
+    2014年11月
+    5篇
+    2014年10月
+    5篇
+    2014年9月
+    15篇
+    2014年8月
+    22篇
+    2014年7月
+    20篇
+    2014年6月
+    18篇
+    2014年5月
+    39篇
+    2013年10月
+    1篇
+
+展开
+博主热门文章
+
+    当前已提供的各国NTP服务器列表
+    3616
+    linux下检测U盘插入并读取文件
+    3400
+    SIM800H NTP网络授时
+    2819
+    音频编解码介绍
+    2771
+    好东西！sqlite3中BLOB数据类型存储大对象运用示例
+    2698
+    yuv420sp旋转90度
+    2476
+    C语言经典面试题目
+    2382
+    SIM900 / SIM800 USSD代码命令 - 工作实例
+    2233
+    UDP局域网内广播消息
+    1958
+    SQLite中如何用api操作BLOB类型的字段
+    1850
+
+联系我们
+客服
+请扫描二维码联系客服
+
+webmaster@csdn.net
+
+400-660-0108
+
+QQ客服 客服论坛
+
+关于招聘广告服务 百度
+
+?1999-2018 CSDN版权所有
+
+京ICP证09002463号
+
+经营性网站备案信息
+
+网络110报警服务
+
+中国互联网举报中心
+
+北京互联网违法和不良信息举报中心
+
+加入CSDN，享受更精准的内容推荐，与500万程序员共同成长！
+登录
+注册
+
+
+    博客
+    学院
+    下载
+    GitChat
+    论坛
+    问答
+    商城
+    VIP
+    活动
+    招聘
+    ITeye
+    码云
+    CSTO
+
+    写博客
+    发Chat
+    登录注册
+
+TCP传输大文件（图片、文档）
+转载 2017年08月28日 18:35:18
+
+遇到TCP传输大文件问题，主要是
+
+（1）、传输快，但拼接成的大文件数据错
+
+（2）、加校验，传输变慢
+
+（3）、接收包数跟发送包数不对应
+
+费了一段时间才解决。
+
+今天，整理一下，留以后备用。
+
+首先，TCP是有连接、自带校验的传输协议，不需要再另外加代码(如接收端回复码给发送端)确保其正确性，这样可以保证TCP的速度，基本能达到4M/s以上。
+
+
+如接收包数和发送包数不一致，这只是说两边发送、接收的速度不对应，发送慢、接受快了，就会出现接收的次数多（不信你可以找找，你接收的数据个数中肯定有小于BUFFER_SIZE的）。所以在拼接成大文件时，就不能按照预设的size进行，应该按照实际接收到的数据size进行偏移。
+
+
+TCP传输时，发送端和接收端有缓冲区，send（）和recv（）函数其实只是实现copy功能，把缓冲区的内容拷出来。所以会出现缓冲区爆掉、接收接不全数据的情况。
+
+
+附上自己调试时写的小代码，仅供参考
+
+客户端实现的功能是，把一段1344000的数据（bmp图片的数据大小去掉54字节的header）发送给服务器端。文件流获取图片数据去图片头，模拟拍照等获取到的纯图片数据。实际传输的数据为1344000的数据。
+
+client.c
+
+#include <netinet/in.h>
+#include <sys/types.h>    
+#include <sys/socket.h>    
+#include <stdio.h>        
+#include <stdlib.h>       
+#include <string.h>      
+#include <time.h>                
+#include <arpa/inet.h>
+
+
+#define SERVER_PORT 6666
+#define BUFFER_SIZE 1024
+
+
+struct image_data{
+int value;
+unsigned char * imageData;
+int length;
+struct image_data * next;
+};
+
+
+
+
+int main(int argc,char **argv)
+{
+ if(argc!=2)
+  {
+      printf("参数错误，清输入两个参数\n");
+     exit(1);
+   }
+  FILE *stream;
+  struct sockaddr_in server_addr;
+   bzero(&server_addr,sizeof(server_addr)); 
+   server_addr.sin_family = AF_INET;    //internet协议族
+   server_addr.sin_addr.s_addr = inet_addr(argv[1]);
+   server_addr.sin_port = htons(SERVER_PORT);   
+   int sfd;
+   sfd=socket(AF_INET,SOCK_STREAM,0);
+   if(sfd<0)
+    {
+      printf("socket error\n");
+      exit(0);
+    }
+ 
+ 
+        int file_length;
+int tcpnum;
+int file_send_len;
+unsigned char snddata[1344000];
+unsigned char buffer[BUFFER_SIZE];
+file_length = sizeof(snddata);
+FILE *fp;
+    if (!(fp = fopen("1.bmp", "rb")))
+    {
+return -1;
+}
+fseek(fp, SEEK_SET, 54);
+    fread(snddata, sizeof(unsigned char), file_length, fp);
+fclose(fp);  
+struct image_data * temp_data = NULL;
+temp_data = (struct image_data *)malloc(sizeof(struct image_data));
+temp_data->imageData = (unsigned char *)malloc(sizeof(unsigned char) * file_length);
+temp_data ->imageData = snddata;
+temp_data ->length = file_length;
+ 
+ 
+   if(connect(sfd,(struct sockaddr*)&server_addr,sizeof(server_addr)) < 0)
+    {
+        printf("Can Not Connect To %s\n",argv[1]);
+        exit(1);
+    }
+
+
+    bzero(buffer,BUFFER_SIZE);
+    printf("正在传输...\n");
+    int len=0; 
+    //不断读取并发送数据
+
+
+tcpnum = file_length/BUFFER_SIZE;
+if((tcpnum * BUFFER_SIZE) < file_length)
+{
+tcpnum++;
+}
+printf("tcpnum = %d\n", tcpnum);
+int i;
+for(i = 0 ; i < tcpnum; i++)
+{
+
+if((file_length - i * BUFFER_SIZE) >= BUFFER_SIZE)
+{
+file_send_len = BUFFER_SIZE;
+}
+else
+{
+file_send_len = file_length - i * BUFFER_SIZE;
+} 
+bzero(buffer,BUFFER_SIZE);
+memcpy(buffer, temp_data->imageData + (i * BUFFER_SIZE), file_send_len);
+
+len  = send(sfd, buffer, file_send_len, 0);
+if(len < 0)
+{
+printf("send file error\n");
+break;
+}
+}
+close(sfd);
+printf("tcp over\n");
+
+
+    return 0;
+}
+
+
+
+
+server.c
+
+服务器端把数据存进一个数据，接收完之后，生成bmp图片。还可以直接存进文件（被注释了），但必须在客户端把图片header加上，一起发给服务器端。
+
+#include <netinet/in.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <string.h>
+#define SERVER_PORT 6666
+#define LISTEN_QUEUE 20
+#define BUFFER_SIZE 1024
+
+
+typedef struct tagRGBQUAD
+{
+    unsigned char rgbBlue;
+    unsigned char rgbGreen;
+    unsigned char rgbRed;
+} RGBQUAD; 
+static int youwritetobmp1(RGBQUAD*pixarr, int xsize, int ysize, int num) ;
+int num = 0;
+
+
+int main(int argc,char **argv)
+{
+  struct sockaddr_in server_addr;
+  bzero(&server_addr,sizeof(server_addr));//全部置零
+  //设置地址相关的属性
+  server_addr.sin_family=AF_INET;
+  server_addr.sin_addr.s_addr=htons(INADDR_ANY);
+  server_addr.sin_port=htons(SERVER_PORT);
+
+
+
+
+  //创建套接字
+  int server_socket=socket(AF_INET,SOCK_STREAM,0);
+  if(server_socket<0) 
+   {
+     printf("socket create error\n");
+     exit(1);
+   }
+  //绑定端口
+  if(bind(server_socket,(struct sockaddr*)&server_addr,sizeof(server_addr)))
+    {
+      printf("bind error\n");
+      exit(1);
+    }
+  //服务器端监听
+   if(listen(server_socket,LISTEN_QUEUE))
+    {
+      printf("Server listen error\n");
+      exit(1);
+    }
+
+
+  //服务器端一直运行
+  while(1)
+   {
+     pid_t pid;
+     struct sockaddr_in client_addr;
+     socklen_t length=sizeof(client_addr);
+     //accept返回一个新的套接字与客户端进行通信
+     int new_server_socket=accept(server_socket,(struct sockaddr*)&client_addr,&length);
+//1*begin******************************************************************************
+     if(new_server_socket==-1)
+      {
+        printf("accept error\n");
+        continue;
+      }
+     else
+      {
+        printf("客户端%s连接成功\n",inet_ntoa(client_addr.sin_addr));
+        pid=fork();
+ //3*begin**运行子进程*************************************************************
+        if(pid==0)
+         {
+           int data_len,flag=0;
+           char buffer[BUFFER_SIZE];
+           // 定义文件流
+           FILE *stream;
+           bzero(buffer,BUFFER_SIZE);
+           strcpy(buffer,"Please enter the total path");
+           strcat(buffer,"\n");
+           send(new_server_socket,buffer,BUFFER_SIZE,0);
+           bzero(buffer,BUFFER_SIZE);
+//2*begin**服务器接受数据*********************************************           
+          // if((stream=fopen("data","w"))==NULL)
+          //  {
+          //    printf("file open error\n");
+          //    exit(1);
+          //  }
+          // else
+          //  {
+          //    bzero(buffer,BUFFER_SIZE);
+          //  }
+
+
+unsigned char recv_data[1344000];
+int offset = 0;
+bzero(recv_data, 1344000);
+
+          // printf("正在接收来自%s的文件....\n",inet_ntoa(client_addr.sin_addr));
+           //先将数据接受到缓冲区buffer中，再写入到新建的文件中
+           while((data_len=recv(new_server_socket,buffer,BUFFER_SIZE,0)) > 0)
+            {
+               flag++;
+  printf("flag is %d\n",flag);
+  printf("data_len is %d\n",data_len);
+               if(flag==1)
+                {
+                 printf("正在接收来自%s的文件....\n",inet_ntoa(client_addr.sin_addr));
+                
+                }
+            
+              if(data_len<0)
+               {
+                printf("接收错误\n");
+                exit(1);
+               }
+              //向文件中写入数据
+              //int write_len=fwrite(buffer,sizeof(char),data_len,stream);
+              //if(write_len>data_len)
+              // {
+              //   printf("file write failed\n");
+              //   exit(1);
+              // }
+      printf("offset is %d\n",offset);
+      memcpy(recv_data + offset, buffer, data_len);
+              offset +=  data_len;
+              bzero(buffer,BUFFER_SIZE);
+            }
+          if(flag>0)
+             printf("%s的文件传送完毕\n",inet_ntoa(client_addr.sin_addr));
+           if(flag==0)
+             printf("%s的文件传输失败\n",inet_ntoa(client_addr.sin_addr));
+//2*end**服务器接受数据**************************************************** 
+         // rename("data",inet_ntoa(client_addr.sin_addr)); 
+          //fclose(stream);
+          //rename("data",inet_ntoa(client_addr.sin_addr));
+          
+ printf("to bmp file\n");
+          youwritetobmp1((RGBQUAD *) recv_data, 1280, 350, num);
+ num++;
+          exit(1);         
+         }
+//3*end**运行子进程**********************************************************
+        else
+         {
+           close(new_server_socket);
+         }
+      }
+//1*end**************************************************************************************
+   close(new_server_socket);
+   }
+ return 0;
+}
+
+
+
+/**描述：生成bmp图片
+
+**参数：1、图片数据  2、宽   3、长  4、保存图片区分字符
+
+*返回：0 成功  -1  不成功
+
+**/
+static int youwritetobmp1(RGBQUAD*pixarr, int xsize, int ysize, int num) 
+{
+       unsigned char header[54] = 
+{
+        0x42, 0x4d, 0, 0, 0, 0, 0, 
+          0, 0, 0,54, 0, 0, 0, 40, 0, 
+          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+          1, 0, 24, 0,0, 0, 0, 0, 0, 0, 
+          0, 0, 0, 0,0, 0, 0, 0, 0, 0,  
+          0, 0, 0, 0,0, 0, 0, 0
+      };
+
+      RGBQUAD * pixarr1; 
+      int i;
+      int j;
+      long file_size = (long)xsize * (long)ysize * 3 + 54;
+      header[2] = (unsigned char)(file_size &0x000000ff);
+      header[3] = (file_size >> 8)   & 0x000000ff;
+      header[4] = (file_size >> 16) & 0x000000ff;
+      header[5] = (file_size >> 24) & 0x000000ff;
+    
+      long width;
+      if(!(xsize%4))     width=xsize;
+      else                    width= xsize+(4-xsize%4);     //è?2?ê?4μ?±?êy￡??ò×a??3é4μ?±?êy
+      header[18] = width & 0x000000ff;
+      header[19] = (width >> 8) &0x000000ff;
+      header[20] = (width >> 16) &0x000000ff;
+      header[21] = (width >> 24) &0x000000ff;
+    
+      long height = ysize;
+      header[22] = height &0x000000ff;
+      header[23] = (height >> 8) &0x000000ff;
+      header[24] = (height >> 16) &0x000000ff;
+      header[25] = (height >> 24) &0x000000ff;
+
+
+      char fname_bmp[128];
+      sprintf(fname_bmp, "capture_%d.bmp",num);
+    
+      FILE *fp;
+      if (!(fp = fopen(fname_bmp, "wb"))) 
+      return -1;
+      
+      fwrite(header, sizeof(unsigned char), 54, fp);
+
+
+      RGBQUAD zero={0,0,0};   //2?×?×??ú￡?ó?zeroì?3?
+      pixarr1 = pixarr + xsize * (ysize -1);
+
+      for(j=0;j<ysize;j++)
+{
+          if(!(xsize%4))
+{
+              for(i=0;i<xsize;i++)
+    { 
+                  fwrite(pixarr1+i, sizeof(RGBQUAD),1, fp);
+              }
+      pixarr1 -=xsize; 
+          }
+          else
+          {
+              for(i=0;i<xsize;i++)
+{ 
+                  fwrite(pixarr+i, sizeof(RGBQUAD),1, fp);
+              }
+
+              for(i=xsize;i<xsize+(4-xsize%4);i++)
+{
+                  fwrite(&zero, sizeof(RGBQUAD),1, fp);
+              }
+          }
+     }
+    
+     fclose(fp);
+     return 0;
+
+
+}
+
+来至:http://blog.csdn.net/cbffyx/article/details/12614037
+目前您尚未登录，请 登录 或 注册 后进行评论
+
+    基于TCP的文件传输
+
+        IT_dreamer1993
+        IT_dreamer1993
+        2016-01-27 02:34:32
+        2319
+
+    之前文件传输问题的性能的优化，着重解决大文件传输速率和可行度的问题。...
+
+    网络编程——TCP文件传输
+
+        Volcano3511
+        Volcano3511
+        2016-12-10 08:01:52
+        2217
+
+    网络编程——TCP文件传输 网络编程TCP文件传输 要求  思路  结果  代码  客户端  服务端  要求- 客户端向服务端发起socket连接，建立数据传输通道- 客户端向服务端发送要传输的文件名...
+
+    免费学习千门课程，能塑造出一个什么样的程序员？
+    技术大牛都在，你还不来么？
+
+    TCP文件传输（一）
+
+        loveRooney
+        loveRooney
+        2014-07-30 17:16:50
+        4460
+
+    最近在做网络抓包和文件传输，今天遇到一个qi
+
+    TcpLister和TcpClient进行文件传输
+
+        u014800094
+        u014800094
+        2017-03-16 11:12:53
+        938
+
+    TCP是一种面向连接的，可靠的，基于字节流的传输层通信协议。TCP建立一个连接需要三次握手，而终止一个连接要经过四次握手。一旦通信双方建立了TCP连接，连接中的任何一方都能向对方发送数据和接受对方发来...
+
+    TCP发送文件（转）
+
+        hachirou
+        hachirou
+        2011-02-13 11:17:00
+        1358
+
+    001//文件传送线程//服务器发送文件，客户端发送文件消息002UINTthreadSendFile(LPVOIDpvar)003{004    CDlgSendMessage *pDlg = (C...
+
+    TCP数据传输（四）：上传文件操作（将客户端的文件发送到服务器）
+    TCP数据传输：上传文件操作（将客户端的文件发送到服务器）
+
+        wangyanming123
+        wangyanming123
+        2016-05-08 21:10:25
+        715
+
+    网络编程 基于TCP的多文件传输程序（二）
+
+        sinat_32660629
+        sinat_32660629
+        2016-11-26 22:25:50
+        1141
+
+    新人，Java学习中，文章中遗漏错误之处，欢迎斧正 个人博客，完全原创 转载请注明出处。 项目全代码地址：GitHub 前一期文章：网络编程 基于Socket的多文件传输程序实...
+
+    Linux网络编程之使用TCP传输文件
+
+        gqb666
+        gqb666
+        2013-05-26 14:59:19
+        9157
+
+    原创作品，转载时请务必以超链接形式标明文章原始出处:http://blog.csdn.net/gqb666/article/details/8976263,作者:gqb666          ...
+
+    Linux--TCPsocket传输图片
+
+        qq_28877125
+        qq_28877125
+        2017-04-06 01:32:17
+        964
+
+    服务器端/* server端代码：接受Client端发送过来的一个图片 */#include #include #include #include #include #i...
+
+    windows基于TCP/IP的简单文件/图片传输
+
+        Jammg
+        Jammg
+        2015-11-21 17:04:41
+        1635
+
+    详细函数资料参考msdn // TransPic_Server.cpp : 定义控制台应用程序的入口点。 /* Server.cpp */ // #include "stdafx.h" #inc...
+
+    Windows下基于TCP协议的大文件传输（流形式）
+    1 1 1 1 1 #ifndef TCPRECVFILE #define TCPRECVFILE #include #include #include #include #defi...
+
+        sty23122555
+        sty23122555
+        2016-06-20 22:38:41
+        4783
+
+    TCP文件传输系统（Version 1.6 多线程，断点续传，支持大文件传输）
+
+        2010年03月27日 21:49
+        2.6MB
+        下载
+
+    VS2010编写CSocket大文件TCP传送
+
+        2014年07月13日 10:17
+        281KB
+        下载
+
+    Socket网络程序设计（3） ———— 利用tcp完成文件传输的设计和实现
+    用TCP/TP进行网际互连（3）———— 利用tcp完成文件传输的设计和实现 1.利用循环面向连接的模型完成固定文件的传输 2.由固定文件扩展成手动输入或选择文件 3.参考connectT...
+
+        KevinBetterQ
+        KevinBetterQ
+        2017-08-10 09:55:37
+        597
+
+    Linux C TCPSocket 传输文件简单实例-多线程实现
+    在Linux下使用C语言TCPSocket实现简单文件传输，包括客户端和服务器端，其中，服务器端使用多线程实现同时接收多个客户端发送的文件。发送文件内容之前，首先需要将文件名和长度信息发送到服务器，为...
+
+        wanna_wsl
+        wanna_wsl
+        2016-12-21 22:04:14
+        3262
+
+    TCP文件上传案例
+
+        u012315155
+        u012315155
+        2016-03-07 22:28:02
+        638
+
+    文件上传分析： 所谓的文件上传（客户端）就是首先的通过输入流将文件读取到内存中，然后在后再通过套接字输出流将文件写入到服务器端，然后就可以通过套接字输入流来读取服务器端返回的结果了。具体的事例代码如下...
+
+    网络编程--实现跨平台传输文件（TCP版）
+
+        2015年03月31日 17:26
+        127KB
+        下载
+
+    TCP文件传输
+
+        JoeBlackzqq
+        JoeBlackzqq
+        2011-11-08 13:44:31
+        640
+
+    下面是一个简单的TCP文件传输的例子，实现环境：Linux C Server.c // 向客户端发送文件 #include #include #include #include ...
+
+    tcp 文件传输
+
+        2012年02月14日 18:33
+        3.17MB
+        下载
+
+    木之子
+
+原创
+    48
+
+粉丝
+    37
+
+喜欢
+    7
+
+评论
+    10
+
+持之以恒
+等级： 5级,点击查看等级说明
+访问量： 19万+
+积分： 2861
+排名： 1万+
+博主最新文章
+更多文章
+
+    sqlite开发例子
+    sqlite语法网址
+    arm板上sqlite3移植及使用
+    结构体中指针赋值问题的分析及C代码示例
+    arm下移植json-c-0.9
+
+文章分类
+
+    c语言面试
+    43篇
+    linux命令
+    12篇
+    dm8168
+    17篇
+    dm8168-dsp
+    13篇
+    AUDIO
+    4篇
+    linux驱动编程
+    6篇
+    linux网络编程
+    17篇
+    linux搭环境
+    1篇
+    linux驱动知识
+    13篇
+    video
+    9篇
+    video面试
+    1篇
+    H264
+    5篇
+    MPEG4
+    3篇
+    网络（tcp
+    6篇
+    linux应用程序编程
+    40篇
+    Hi35xx
+    3篇
+    Ubuntu的搭环境
+    1篇
+    code
+    10篇
+    STM32 CAN 控制器
+    1篇
+    error
+    2篇
+    wifi
+    17篇
+    Makefile
+    12篇
+    git
+    1篇
+    bash脚本语法
+    1篇
+    wireshark常用的过滤命令
+    1篇
+    gcc
+    1篇
+    spi
+    6篇
+    矢量字形库
+    1篇
+    sd和usb自动检测
+    1篇
+    Source Insight
+    1篇
+    yuv
+    2篇
+    linux面试
+    1篇
+    DVB
+    1篇
+    SSL
+    1篇
+    gsm
+    2篇
+    shell
+    2篇
+    linux内核链表
+    4篇
+    V4L2
+    1篇
+    fifo循环队列
+    3篇
+    json-c
+    2篇
+    画流程图的工具
+    1篇
+    sqlite
+    7篇
+    Android驱动
+    13篇
+    Zwave
+    6篇
+    rs232和rs485
+    1篇
+    cloud39
+    1篇
+    onvif
+    1篇
+    ffmpeg
+    4篇
+    链表
+    1篇
+    CRC16校验C语言程序源码
+    2篇
+
+展开
+文章存档
+
+    2018年4月
+    5篇
+    2017年11月
+    1篇
+    2017年10月
+    1篇
+    2017年8月
+    6篇
+    2017年7月
+    3篇
+    2017年6月
+    2篇
+    2017年5月
+    1篇
+    2017年4月
+    1篇
+    2017年3月
+    4篇
+    2017年2月
+    1篇
+    2017年1月
+    1篇
+    2016年12月
+    3篇
+    2016年11月
+    2篇
+    2016年10月
+    3篇
+    2016年8月
+    5篇
+    2016年7月
+    4篇
+    2016年5月
+    4篇
+    2016年4月
+    20篇
+    2016年3月
+    6篇
+    2016年2月
+    10篇
+    2016年1月
+    7篇
+    2015年12月
+    5篇
+    2015年11月
+    6篇
+    2015年10月
+    8篇
+    2015年9月
+    4篇
+    2015年8月
+    3篇
+    2015年7月
+    2篇
+    2015年6月
+    13篇
+    2015年5月
+    6篇
+    2015年4月
+    19篇
+    2015年3月
+    11篇
+    2015年2月
+    5篇
+    2015年1月
+    28篇
+    2014年12月
+    17篇
+    2014年11月
+    5篇
+    2014年10月
+    5篇
+    2014年9月
+    15篇
+    2014年8月
+    22篇
+    2014年7月
+    20篇
+    2014年6月
+    18篇
+    2014年5月
+    39篇
+    2013年10月
+    1篇
+
+展开
+博主热门文章
+
+    当前已提供的各国NTP服务器列表
+    3616
+    linux下检测U盘插入并读取文件
+    3400
+    SIM800H NTP网络授时
+    2819
+    音频编解码介绍
+    2771
+    好东西！sqlite3中BLOB数据类型存储大对象运用示例
+    2698
+    yuv420sp旋转90度
+    2476
+    C语言经典面试题目
+    2382
+    SIM900 / SIM800 USSD代码命令 - 工作实例
+    2233
+    UDP局域网内广播消息
+    1958
+    SQLite中如何用api操作BLOB类型的字段
+    1850
+
+联系我们
+客服
+请扫描二维码联系客服
+
+webmaster@csdn.net
+
+400-660-0108
+
+QQ客服 客服论坛
+
+关于招聘广告服务 百度
+
+?1999-2018 CSDN版权所有
+
+京ICP证09002463号
+
+经营性网站备案信息
+
+网络110报警服务
+
+中国互联网举报中心
+
+北京互联网违法和不良信息举报中心
+
+加入CSDN，享受更精准的内容推荐，与500万程序员共同成长！
+登录
+注册
+
+
+    博客
+    学院
+    下载
+    GitChat
+    论坛
+    问答
+    商城
+    VIP
+    活动
+    招聘
+    ITeye
+    码云
+    CSTO
+
+    写博客
+    发Chat
+    登录注册
+
+TCP传输大文件（图片、文档）
+转载 2017年08月28日 18:35:18
+
+遇到TCP传输大文件问题，主要是
+
+（1）、传输快，但拼接成的大文件数据错
+
+（2）、加校验，传输变慢
+
+（3）、接收包数跟发送包数不对应
+
+费了一段时间才解决。
+
+今天，整理一下，留以后备用。
+
+首先，TCP是有连接、自带校验的传输协议，不需要再另外加代码(如接收端回复码给发送端)确保其正确性，这样可以保证TCP的速度，基本能达到4M/s以上。
+
+
+如接收包数和发送包数不一致，这只是说两边发送、接收的速度不对应，发送慢、接受快了，就会出现接收的次数多（不信你可以找找，你接收的数据个数中肯定有小于BUFFER_SIZE的）。所以在拼接成大文件时，就不能按照预设的size进行，应该按照实际接收到的数据size进行偏移。
+
+
+TCP传输时，发送端和接收端有缓冲区，send（）和recv（）函数其实只是实现copy功能，把缓冲区的内容拷出来。所以会出现缓冲区爆掉、接收接不全数据的情况。
+
+
+附上自己调试时写的小代码，仅供参考
+
+客户端实现的功能是，把一段1344000的数据（bmp图片的数据大小去掉54字节的header）发送给服务器端。文件流获取图片数据去图片头，模拟拍照等获取到的纯图片数据。实际传输的数据为1344000的数据。
+
+client.c
+
+#include <netinet/in.h>
+#include <sys/types.h>    
+#include <sys/socket.h>    
+#include <stdio.h>        
+#include <stdlib.h>       
+#include <string.h>      
+#include <time.h>                
+#include <arpa/inet.h>
+
+
+#define SERVER_PORT 6666
+#define BUFFER_SIZE 1024
+
+
+struct image_data{
+int value;
+unsigned char * imageData;
+int length;
+struct image_data * next;
+};
+
+
+
+
+int main(int argc,char **argv)
+{
+ if(argc!=2)
+  {
+      printf("参数错误，清输入两个参数\n");
+     exit(1);
+   }
+  FILE *stream;
+  struct sockaddr_in server_addr;
+   bzero(&server_addr,sizeof(server_addr)); 
+   server_addr.sin_family = AF_INET;    //internet协议族
+   server_addr.sin_addr.s_addr = inet_addr(argv[1]);
+   server_addr.sin_port = htons(SERVER_PORT);   
+   int sfd;
+   sfd=socket(AF_INET,SOCK_STREAM,0);
+   if(sfd<0)
+    {
+      printf("socket error\n");
+      exit(0);
+    }
+ 
+ 
+        int file_length;
+int tcpnum;
+int file_send_len;
+unsigned char snddata[1344000];
+unsigned char buffer[BUFFER_SIZE];
+file_length = sizeof(snddata);
+FILE *fp;
+    if (!(fp = fopen("1.bmp", "rb")))
+    {
+return -1;
+}
+fseek(fp, SEEK_SET, 54);
+    fread(snddata, sizeof(unsigned char), file_length, fp);
+fclose(fp);  
+struct image_data * temp_data = NULL;
+temp_data = (struct image_data *)malloc(sizeof(struct image_data));
+temp_data->imageData = (unsigned char *)malloc(sizeof(unsigned char) * file_length);
+temp_data ->imageData = snddata;
+temp_data ->length = file_length;
+ 
+ 
+   if(connect(sfd,(struct sockaddr*)&server_addr,sizeof(server_addr)) < 0)
+    {
+        printf("Can Not Connect To %s\n",argv[1]);
+        exit(1);
+    }
+
+
+    bzero(buffer,BUFFER_SIZE);
+    printf("正在传输...\n");
+    int len=0; 
+    //不断读取并发送数据
+
+
+tcpnum = file_length/BUFFER_SIZE;
+if((tcpnum * BUFFER_SIZE) < file_length)
+{
+tcpnum++;
+}
+printf("tcpnum = %d\n", tcpnum);
+int i;
+for(i = 0 ; i < tcpnum; i++)
+{
+
+if((file_length - i * BUFFER_SIZE) >= BUFFER_SIZE)
+{
+file_send_len = BUFFER_SIZE;
+}
+else
+{
+file_send_len = file_length - i * BUFFER_SIZE;
+} 
+bzero(buffer,BUFFER_SIZE);
+memcpy(buffer, temp_data->imageData + (i * BUFFER_SIZE), file_send_len);
+
+len  = send(sfd, buffer, file_send_len, 0);
+if(len < 0)
+{
+printf("send file error\n");
+break;
+}
+}
+close(sfd);
+printf("tcp over\n");
+
+
+    return 0;
+}
+
+
+
+
+server.c
+
+服务器端把数据存进一个数据，接收完之后，生成bmp图片。还可以直接存进文件（被注释了），但必须在客户端把图片header加上，一起发给服务器端。
+
+#include <netinet/in.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <string.h>
+#define SERVER_PORT 6666
+#define LISTEN_QUEUE 20
+#define BUFFER_SIZE 1024
+
+
+typedef struct tagRGBQUAD
+{
+    unsigned char rgbBlue;
+    unsigned char rgbGreen;
+    unsigned char rgbRed;
+} RGBQUAD; 
+static int youwritetobmp1(RGBQUAD*pixarr, int xsize, int ysize, int num) ;
+int num = 0;
+
+
+int main(int argc,char **argv)
+{
+  struct sockaddr_in server_addr;
+  bzero(&server_addr,sizeof(server_addr));//全部置零
+  //设置地址相关的属性
+  server_addr.sin_family=AF_INET;
+  server_addr.sin_addr.s_addr=htons(INADDR_ANY);
+  server_addr.sin_port=htons(SERVER_PORT);
+
+
+
+
+  //创建套接字
+  int server_socket=socket(AF_INET,SOCK_STREAM,0);
+  if(server_socket<0) 
+   {
+     printf("socket create error\n");
+     exit(1);
+   }
+  //绑定端口
+  if(bind(server_socket,(struct sockaddr*)&server_addr,sizeof(server_addr)))
+    {
+      printf("bind error\n");
+      exit(1);
+    }
+  //服务器端监听
+   if(listen(server_socket,LISTEN_QUEUE))
+    {
+      printf("Server listen error\n");
+      exit(1);
+    }
+
+
+  //服务器端一直运行
+  while(1)
+   {
+     pid_t pid;
+     struct sockaddr_in client_addr;
+     socklen_t length=sizeof(client_addr);
+     //accept返回一个新的套接字与客户端进行通信
+     int new_server_socket=accept(server_socket,(struct sockaddr*)&client_addr,&length);
+//1*begin******************************************************************************
+     if(new_server_socket==-1)
+      {
+        printf("accept error\n");
+        continue;
+      }
+     else
+      {
+        printf("客户端%s连接成功\n",inet_ntoa(client_addr.sin_addr));
+        pid=fork();
+ //3*begin**运行子进程*************************************************************
+        if(pid==0)
+         {
+           int data_len,flag=0;
+           char buffer[BUFFER_SIZE];
+           // 定义文件流
+           FILE *stream;
+           bzero(buffer,BUFFER_SIZE);
+           strcpy(buffer,"Please enter the total path");
+           strcat(buffer,"\n");
+           send(new_server_socket,buffer,BUFFER_SIZE,0);
+           bzero(buffer,BUFFER_SIZE);
+//2*begin**服务器接受数据*********************************************           
+          // if((stream=fopen("data","w"))==NULL)
+          //  {
+          //    printf("file open error\n");
+          //    exit(1);
+          //  }
+          // else
+          //  {
+          //    bzero(buffer,BUFFER_SIZE);
+          //  }
+
+
+unsigned char recv_data[1344000];
+int offset = 0;
+bzero(recv_data, 1344000);
+
+          // printf("正在接收来自%s的文件....\n",inet_ntoa(client_addr.sin_addr));
+           //先将数据接受到缓冲区buffer中，再写入到新建的文件中
+           while((data_len=recv(new_server_socket,buffer,BUFFER_SIZE,0)) > 0)
+            {
+               flag++;
+  printf("flag is %d\n",flag);
+  printf("data_len is %d\n",data_len);
+               if(flag==1)
+                {
+                 printf("正在接收来自%s的文件....\n",inet_ntoa(client_addr.sin_addr));
+                
+                }
+            
+              if(data_len<0)
+               {
+                printf("接收错误\n");
+                exit(1);
+               }
+              //向文件中写入数据
+              //int write_len=fwrite(buffer,sizeof(char),data_len,stream);
+              //if(write_len>data_len)
+              // {
+              //   printf("file write failed\n");
+              //   exit(1);
+              // }
+      printf("offset is %d\n",offset);
+      memcpy(recv_data + offset, buffer, data_len);
+              offset +=  data_len;
+              bzero(buffer,BUFFER_SIZE);
+            }
+          if(flag>0)
+             printf("%s的文件传送完毕\n",inet_ntoa(client_addr.sin_addr));
+           if(flag==0)
+             printf("%s的文件传输失败\n",inet_ntoa(client_addr.sin_addr));
+//2*end**服务器接受数据**************************************************** 
+         // rename("data",inet_ntoa(client_addr.sin_addr)); 
+          //fclose(stream);
+          //rename("data",inet_ntoa(client_addr.sin_addr));
+          
+ printf("to bmp file\n");
+          youwritetobmp1((RGBQUAD *) recv_data, 1280, 350, num);
+ num++;
+          exit(1);         
+         }
+//3*end**运行子进程**********************************************************
+        else
+         {
+           close(new_server_socket);
+         }
+      }
+//1*end**************************************************************************************
+   close(new_server_socket);
+   }
+ return 0;
+}
+
+
+
+/**描述：生成bmp图片
+
+**参数：1、图片数据  2、宽   3、长  4、保存图片区分字符
+
+*返回：0 成功  -1  不成功
+
+**/
+static int youwritetobmp1(RGBQUAD*pixarr, int xsize, int ysize, int num) 
+{
+       unsigned char header[54] = 
+{
+        0x42, 0x4d, 0, 0, 0, 0, 0, 
+          0, 0, 0,54, 0, 0, 0, 40, 0, 
+          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+          1, 0, 24, 0,0, 0, 0, 0, 0, 0, 
+          0, 0, 0, 0,0, 0, 0, 0, 0, 0,  
+          0, 0, 0, 0,0, 0, 0, 0
+      };
+
+      RGBQUAD * pixarr1; 
+      int i;
+      int j;
+      long file_size = (long)xsize * (long)ysize * 3 + 54;
+      header[2] = (unsigned char)(file_size &0x000000ff);
+      header[3] = (file_size >> 8)   & 0x000000ff;
+      header[4] = (file_size >> 16) & 0x000000ff;
+      header[5] = (file_size >> 24) & 0x000000ff;
+    
+      long width;
+      if(!(xsize%4))     width=xsize;
+      else                    width= xsize+(4-xsize%4);     //è?2?ê?4μ?±?êy￡??ò×a??3é4μ?±?êy
+      header[18] = width & 0x000000ff;
+      header[19] = (width >> 8) &0x000000ff;
+      header[20] = (width >> 16) &0x000000ff;
+      header[21] = (width >> 24) &0x000000ff;
+    
+      long height = ysize;
+      header[22] = height &0x000000ff;
+      header[23] = (height >> 8) &0x000000ff;
+      header[24] = (height >> 16) &0x000000ff;
+      header[25] = (height >> 24) &0x000000ff;
+
+
+      char fname_bmp[128];
+      sprintf(fname_bmp, "capture_%d.bmp",num);
+    
+      FILE *fp;
+      if (!(fp = fopen(fname_bmp, "wb"))) 
+      return -1;
+      
+      fwrite(header, sizeof(unsigned char), 54, fp);
+
+
+      RGBQUAD zero={0,0,0};   //2?×?×??ú￡?ó?zeroì?3?
+      pixarr1 = pixarr + xsize * (ysize -1);
+
+      for(j=0;j<ysize;j++)
+{
+          if(!(xsize%4))
+{
+              for(i=0;i<xsize;i++)
+    { 
+                  fwrite(pixarr1+i, sizeof(RGBQUAD),1, fp);
+              }
+      pixarr1 -=xsize; 
+          }
+          else
+          {
+              for(i=0;i<xsize;i++)
+{ 
+                  fwrite(pixarr+i, sizeof(RGBQUAD),1, fp);
+              }
+
+              for(i=xsize;i<xsize+(4-xsize%4);i++)
+{
+                  fwrite(&zero, sizeof(RGBQUAD),1, fp);
+              }
+          }
+     }
+    
+     fclose(fp);
+     return 0;
+
+
+}
+
+来至:http://blog.csdn.net/cbffyx/article/details/12614037
+目前您尚未登录，请 登录 或 注册 后进行评论
+
+    基于TCP的文件传输
+
+        IT_dreamer1993
+        IT_dreamer1993
+        2016-01-27 02:34:32
+        2319
+
+    之前文件传输问题的性能的优化，着重解决大文件传输速率和可行度的问题。...
+
+    网络编程——TCP文件传输
+
+        Volcano3511
+        Volcano3511
+        2016-12-10 08:01:52
+        2217
+
+    网络编程——TCP文件传输 网络编程TCP文件传输 要求  思路  结果  代码  客户端  服务端  要求- 客户端向服务端发起socket连接，建立数据传输通道- 客户端向服务端发送要传输的文件名...
+
+    免费学习千门课程，能塑造出一个什么样的程序员？
+    技术大牛都在，你还不来么？
+
+    TCP文件传输（一）
+
+        loveRooney
+        loveRooney
+        2014-07-30 17:16:50
+        4460
+
+    最近在做网络抓包和文件传输，今天遇到一个qi
+
+    TcpLister和TcpClient进行文件传输
+
+        u014800094
+        u014800094
+        2017-03-16 11:12:53
+        938
+
+    TCP是一种面向连接的，可靠的，基于字节流的传输层通信协议。TCP建立一个连接需要三次握手，而终止一个连接要经过四次握手。一旦通信双方建立了TCP连接，连接中的任何一方都能向对方发送数据和接受对方发来...
+
+    TCP发送文件（转）
+
+        hachirou
+        hachirou
+        2011-02-13 11:17:00
+        1358
+
+    001//文件传送线程//服务器发送文件，客户端发送文件消息002UINTthreadSendFile(LPVOIDpvar)003{004    CDlgSendMessage *pDlg = (C...
+
+    TCP数据传输（四）：上传文件操作（将客户端的文件发送到服务器）
+    TCP数据传输：上传文件操作（将客户端的文件发送到服务器）
+
+        wangyanming123
+        wangyanming123
+        2016-05-08 21:10:25
+        715
+
+    网络编程 基于TCP的多文件传输程序（二）
+
+        sinat_32660629
+        sinat_32660629
+        2016-11-26 22:25:50
+        1141
+
+    新人，Java学习中，文章中遗漏错误之处，欢迎斧正 个人博客，完全原创 转载请注明出处。 项目全代码地址：GitHub 前一期文章：网络编程 基于Socket的多文件传输程序实...
+
+    Linux网络编程之使用TCP传输文件
+
+        gqb666
+        gqb666
+        2013-05-26 14:59:19
+        9157
+
+    原创作品，转载时请务必以超链接形式标明文章原始出处:http://blog.csdn.net/gqb666/article/details/8976263,作者:gqb666          ...
+
+    Linux--TCPsocket传输图片
+
+        qq_28877125
+        qq_28877125
+        2017-04-06 01:32:17
+        964
+
+    服务器端/* server端代码：接受Client端发送过来的一个图片 */#include #include #include #include #include #i...
+
+    windows基于TCP/IP的简单文件/图片传输
+
+        Jammg
+        Jammg
+        2015-11-21 17:04:41
+        1635
+
+    详细函数资料参考msdn // TransPic_Server.cpp : 定义控制台应用程序的入口点。 /* Server.cpp */ // #include "stdafx.h" #inc...
+
+    Windows下基于TCP协议的大文件传输（流形式）
+    1 1 1 1 1 #ifndef TCPRECVFILE #define TCPRECVFILE #include #include #include #include #defi...
+
+        sty23122555
+        sty23122555
+        2016-06-20 22:38:41
+        4783
+
+    TCP文件传输系统（Version 1.6 多线程，断点续传，支持大文件传输）
+
+        2010年03月27日 21:49
+        2.6MB
+        下载
+
+    VS2010编写CSocket大文件TCP传送
+
+        2014年07月13日 10:17
+        281KB
+        下载
+
+    Socket网络程序设计（3） ———— 利用tcp完成文件传输的设计和实现
+    用TCP/TP进行网际互连（3）———— 利用tcp完成文件传输的设计和实现 1.利用循环面向连接的模型完成固定文件的传输 2.由固定文件扩展成手动输入或选择文件 3.参考connectT...
+
+        KevinBetterQ
+        KevinBetterQ
+        2017-08-10 09:55:37
+        597
+
+    Linux C TCPSocket 传输文件简单实例-多线程实现
+    在Linux下使用C语言TCPSocket实现简单文件传输，包括客户端和服务器端，其中，服务器端使用多线程实现同时接收多个客户端发送的文件。发送文件内容之前，首先需要将文件名和长度信息发送到服务器，为...
+
+        wanna_wsl
+        wanna_wsl
+        2016-12-21 22:04:14
+        3262
+
+    TCP文件上传案例
+
+        u012315155
+        u012315155
+        2016-03-07 22:28:02
+        638
+
+    文件上传分析： 所谓的文件上传（客户端）就是首先的通过输入流将文件读取到内存中，然后在后再通过套接字输出流将文件写入到服务器端，然后就可以通过套接字输入流来读取服务器端返回的结果了。具体的事例代码如下...
+
+    网络编程--实现跨平台传输文件（TCP版）
+
+        2015年03月31日 17:26
+        127KB
+        下载
+
+    TCP文件传输
+
+        JoeBlackzqq
+        JoeBlackzqq
+        2011-11-08 13:44:31
+        640
+
+    下面是一个简单的TCP文件传输的例子，实现环境：Linux C Server.c // 向客户端发送文件 #include #include #include #include ...
+
+    tcp 文件传输
+
+        2012年02月14日 18:33
+        3.17MB
+        下载
+
+    木之子
+
+原创
+    48
+
+粉丝
+    37
+
+喜欢
+    7
+
+评论
+    10
+
+持之以恒
+等级： 5级,点击查看等级说明
+访问量： 19万+
+积分： 2861
+排名： 1万+
+博主最新文章
+更多文章
+
+    sqlite开发例子
+    sqlite语法网址
+    arm板上sqlite3移植及使用
+    结构体中指针赋值问题的分析及C代码示例
+    arm下移植json-c-0.9
+
+文章分类
+
+    c语言面试
+    43篇
+    linux命令
+    12篇
+    dm8168
+    17篇
+    dm8168-dsp
+    13篇
+    AUDIO
+    4篇
+    linux驱动编程
+    6篇
+    linux网络编程
+    17篇
+    linux搭环境
+    1篇
+    linux驱动知识
+    13篇
+    video
+    9篇
+    video面试
+    1篇
+    H264
+    5篇
+    MPEG4
+    3篇
+    网络（tcp
+    6篇
+    linux应用程序编程
+    40篇
+    Hi35xx
+    3篇
+    Ubuntu的搭环境
+    1篇
+    code
+    10篇
+    STM32 CAN 控制器
+    1篇
+    error
+    2篇
+    wifi
+    17篇
+    Makefile
+    12篇
+    git
+    1篇
+    bash脚本语法
+    1篇
+    wireshark常用的过滤命令
+    1篇
+    gcc
+    1篇
+    spi
+    6篇
+    矢量字形库
+    1篇
+    sd和usb自动检测
+    1篇
+    Source Insight
+    1篇
+    yuv
+    2篇
+    linux面试
+    1篇
+    DVB
+    1篇
+    SSL
+    1篇
+    gsm
+    2篇
+    shell
+    2篇
+    linux内核链表
+    4篇
+    V4L2
+    1篇
+    fifo循环队列
+    3篇
+    json-c
+    2篇
+    画流程图的工具
+    1篇
+    sqlite
+    7篇
+    Android驱动
+    13篇
+    Zwave
+    6篇
+    rs232和rs485
+    1篇
+    cloud39
+    1篇
+    onvif
+    1篇
+    ffmpeg
+    4篇
+    链表
+    1篇
+    CRC16校验C语言程序源码
+    2篇
+
+展开
+文章存档
+
+    2018年4月
+    5篇
+    2017年11月
+    1篇
+    2017年10月
+    1篇
+    2017年8月
+    6篇
+    2017年7月
+    3篇
+    2017年6月
+    2篇
+    2017年5月
+    1篇
+    2017年4月
+    1篇
+    2017年3月
+    4篇
+    2017年2月
+    1篇
+    2017年1月
+    1篇
+    2016年12月
+    3篇
+    2016年11月
+    2篇
+    2016年10月
+    3篇
+    2016年8月
+    5篇
+    2016年7月
+    4篇
+    2016年5月
+    4篇
+    2016年4月
+    20篇
+    2016年3月
+    6篇
+    2016年2月
+    10篇
+    2016年1月
+    7篇
+    2015年12月
+    5篇
+    2015年11月
+    6篇
+    2015年10月
+    8篇
+    2015年9月
+    4篇
+    2015年8月
+    3篇
+    2015年7月
+    2篇
+    2015年6月
+    13篇
+    2015年5月
+    6篇
+    2015年4月
+    19篇
+    2015年3月
+    11篇
+    2015年2月
+    5篇
+    2015年1月
+    28篇
+    2014年12月
+    17篇
+    2014年11月
+    5篇
+    2014年10月
+    5篇
+    2014年9月
+    15篇
+    2014年8月
+    22篇
+    2014年7月
+    20篇
+    2014年6月
+    18篇
+    2014年5月
+    39篇
+    2013年10月
+    1篇
+
+展开
+博主热门文章
+
+    当前已提供的各国NTP服务器列表
+    3616
+    linux下检测U盘插入并读取文件
+    3400
+    SIM800H NTP网络授时
+    2819
+    音频编解码介绍
+  

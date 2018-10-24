@@ -1,0 +1,24 @@
+﻿生成启动时间为 2018/4/26 11:50:24。
+     1>项目“D:\junior\vs\experience3\udp\CSocketServer\CSocketServer\CSocketServer.vcxproj”在节点 2 上(build 个目标)。
+     1>InitializeBuildStatus:
+         正在创建“Debug\CSocketServer.unsuccessfulbuild”，因为已指定“AlwaysCreate”。
+       ClCompile:
+         所有输出均为最新。
+         所有输出均为最新。
+       ResourceCompile:
+         所有输出均为最新。
+       ManifestResourceCompile:
+         所有输出均为最新。
+       Link:
+         所有输出均为最新。
+       Manifest:
+         C:\Program Files (x86)\Microsoft SDKs\Windows\v7.0A\bin\mt.exe /nologo /verbose /out:"Debug\CSocketServer.exe.embed.manifest" /manifest Debug\CSocketServer.exe.intermediate.manifest D:\mysoft\VisualStudio2017\VC\Include\Manifest\dpiaware.manifest
+         所有输出均为最新。
+       FinalizeBuildStatus:
+         正在删除文件“Debug\CSocketServer.unsuccessfulbuild”。
+         正在对“Debug\CSocketServer.lastbuildstate”执行 Touch 任务。
+     1>已完成生成项目“D:\junior\vs\experience3\udp\CSocketServer\CSocketServer\CSocketServer.vcxproj”(build 个目标)的操作。
+
+生成成功。
+
+已用时间 00:00:00.11
